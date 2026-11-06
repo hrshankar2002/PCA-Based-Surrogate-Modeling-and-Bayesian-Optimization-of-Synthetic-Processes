@@ -1,8 +1,6 @@
 # PCA-Based Surrogate Modeling and Bayesian Optimization of Synthetic Processes
 
-A worked-example guide to the executed synthetic study
-
-Start with this idea: **we choose some input settings, and a process produces output values.** We want to learn that relationship, use it to choose better inputs, and see whether one model can serve two processes.
+Idea: **We choose some input settings, and a process produces output values.** We want to learn that relationship, use it to choose better inputs, and see whether one model can serve two processes.
 
 This guide starts from that idea and builds up the experiments one at a time. The [notebook](Process_Study_Code_Only.ipynb) contains the code and its executed outputs. This README explains what those calculations mean.
 
@@ -23,11 +21,9 @@ For Process A, consider this input setting:
 
 `x1 = 0.2, x2 = 0.6, x3 = 0.8`
 
-An **input setting** is one combination of input values. These settings have generic meanings. No physical units are assigned to these inputs.
+An **input setting** is one combination of input values.
 
-If the process produced only one number, our dataset could be a simple input/output table. But this process produces several **maps**. A map is a grid of values: the row and column tell us where a value belongs.
-
-A **channel** is one type of output with its own map. For example, channel 1 and channel 3 are two different outputs at the same location. Their numerical values need not be similar.
+Here we consider the process to be multi channel, each with a respective map (grid of values: the row and column format). A **channel** is one type of output with its own map. For example, channel 1 and channel 3 are two different outputs at the same location. Their numerical values need not be similar.
 
 
 | Process | Inputs in one input setting | Maps produced | Size of each map | Numbers produced per input setting |
@@ -40,9 +36,7 @@ Five hundred outputs do **not** mean five hundred independent experiments. We ch
 
 ### Where the outputs come from
 
-We do not have measured data here. We wrote a fixed function that creates the maps. That is what **synthetic** means in this study.
-
-We create each output map by **adding together five simple patterns**. Imagine stacking five transparent sheets, each with a different picture.
+As data source for this synthetic study, we use a pre-designed function to creates the maps. We create each output map by **adding together five simple patterns**. Imagine stacking five transparent sheets, each with a different picture.
 
 | Pattern | What it looks like |
 | --- | --- |
@@ -54,8 +48,6 @@ We create each output map by **adding together five simple patterns**. Imagine s
 
 The **input setting** is simply the list of input numbers, such as `[0.2, 0.6, 0.8]`. The synthetic function converts those numbers into amounts of each pattern.
 
-> **Teaching example:** the following amounts illustrate how patterns are combined. They are not the actual coefficients for the input setting above.
-
 ```text
 Output map = starting level
            + 0.4 × flat pattern
@@ -65,11 +57,26 @@ Output map = starting level
            + 0.1 × diagonal pattern
 ```
 
+Actual synthetic generator used :
+$$
+Y_{r,s,k}(X) = b_k + \sum_{j=1}^{5} c_j(X)\,W_{j,k}\,B_j(r,s)
+$$
+
+**Where:**
+
+- $X$: Input recipe (3 variables for Process A, 4 for Process B).
+- $Y_{r,s,k}(X)$: Generated output at grid location $(r,s)$ for channel $k$.
+- $b_k$: Fixed starting level (offset) for output channel $k$.
+- $c_j(X)$: Recipe-dependent coefficient for spatial pattern $j$.
+- $W_{j,k}$: Fixed weight connecting spatial pattern $j$ to output channel $k$.
+- $B_j(r,s)$: Value of spatial pattern $j$ at grid location $(r,s)$.
+- $j$: Spatial pattern index ($1$ to $5$).
+- $k$: Output channel index ($1$ to $5$ for Process A, $1$ to $10$ for Process B).
+- $(r,s)$: Row and column coordinates of the $10 \times 10$ spatial grid.
+
 At **every location in the map**, we multiply that location’s value in each pattern by its amount, then add the five contributions and the starting level. That gives the output value at that location. A different input setting changes these amounts, so the resulting map changes.
 
-**Each channel is a different output measurement.** For the same input setting, channel A1 might show a strong bump, while channel A2 shows a stronger wave. Each channel has fixed weights controlling how the input setting changes its pattern amounts, and a starting level that shifts the values of its map up or down.
-
-We built the synthetic function this way so the maps have a simple underlying structure. That gives PCA recurring structure to discover when it compresses the outputs later.
+**Each channel is a different output measurement.** For the same input setting, channel A1 might show a strong bump, while channel A2 shows a stronger wave. Each channel has fixed weights controlling how the input setting changes its pattern amounts, and a starting level that shifts the values of its map up or down. We built the synthetic function this way so the maps have a simple underlying structure. That gives PCA recurring structure to discover when it compresses the outputs later.
 
 ### Calculate one value in channel A3
 
@@ -91,11 +98,7 @@ At one location in one channel, the calculation is:
 | Total output | −0.090171 |
 
 
-The total **−0.090171 is the true synthetic value at one specific location in channel A3**, for the input setting `[0.2, 0.6, 0.8]`. The table shows how our synthetic function calculates that one value.
-
-It is neither a model prediction nor an average of the whole channel. Channel A3 has a **10 × 10 map**, so it contains **100 values**. This table calculates just one of those 100 values: row 6, column 7, using zero-based indices.
-
-Later, a trained model predicts the entire map for A3. We can compare its predicted value at this same location with **−0.090171** to see how close it gets. The prediction experiment measures error across all locations and channels for its held-out input settings.
+The total **−0.090171 is the true synthetic value at one specific location in channel A3**, for the input setting `[0.2, 0.6, 0.8]`. The table shows how our synthetic function calculates that one value.  Channel A3 has a **10 × 10 map**, so it contains **100 values**. This table calculates just one of those 100 values: row 6, column 7, using zero-based indices.
 
 The generator’s weights stay fixed throughout the study. Changing input settings or random sampling seeds does not redefine the underlying process.
 
@@ -114,132 +117,354 @@ The next pictures use a different, simple reference input setting: every input i
 **Read this picture:** B produces ten channels. Each panel has its own color scale, so equal colors across channels can represent different numbers.
 
 
-### Change one setting and watch one output
-
-A three- or four-input function cannot be shown completely by one curve. Instead, hold all but one input at 0.5, vary the remaining input from 0 to 1, and watch channel 1 at row 6, column 7.
-
-Each line below is one such slice. We repeat this for every input.
-
-
-![One-input-at-a-time slices through both functions](results/function_input_slices.png)
-
-**Read this picture:** For this selected A output, changing x3 has a large effect while changing x2 has a smaller effect. B shows a curved x1 response. Another location or reference input setting can behave differently; these slices are not global feature-importance scores.
-
-
 ### Add imperfect observations
 
 For the prediction experiment, we add independent normal noise with standard deviation **0.035** to the clean map values. A model trains on these noisy observations. Because we generated the data ourselves, we can still compare its predictions with the hidden clean answer.
 
-**You should now be able to say:** “One input setting goes into a fixed synthetic function and produces several maps. The dataset contains input setting/map pairs. The models learn from noisy versions of those pairs.”
-
-*Notebook connection: cells 1–4 set up the tools, define the function, and produce these pictures.*
+**Conclusion:** “One input setting goes into a fixed synthetic function and produces several maps. The dataset contains input setting/map pairs. The models learn from noisy versions of those pairs.”
 
 
-## 2. Understand training and inference with a tiny map
-
-Before comparing models, we need to understand what the prediction pipeline actually learns.
+## 2. Training & Inference Insights
 
 ### Why compress the output?
 
-Process A has 500 output numbers per input setting. Many of these values move together because the maps have repeated spatial structure. PCA looks for a small number of patterns that describe most of that variation.
-
-Instead of predicting all 500 numbers directly, we ask the model to predict five numbers. These are called **PCA scores**. A stored PCA decoder then expands the five numbers into the full maps.
-
-### Teaching example: compress a two-number map
-
-Imagine each map has only two values. Three observed maps are:
+Process A has 500 output numbers per input setting. Many of these values move together because the maps have repeated spatial structure. PCA looks for a small number of patterns that describe most of that variation. Instead of predicting all 500 numbers directly, we ask the model to predict five numbers. These are called **PCA scores**. A stored PCA decoder then expands the five numbers into the full maps.
 
 
-| Training example | Map values |
-| --- | --- |
+### How PCA Compresses and Reconstructs Output Maps ?
+
+Imagine each output map contains only **two values**. We observe three maps from three different input settings.
+
+| Training example | Original map |
+|---|---|
 | 1 | [1, 3] |
 | 2 | [2, 4] |
 | 3 | [3, 5] |
 
+Notice that the second value is always 2 greater than the first. Both values increase together, meaning their variation is redundant. Instead of storing two changing values, PCA can represent each map using **one number (PCA score)**.
 
-The second value always exceeds the first by 2. Both values rise together. Therefore, one changing number can describe these maps.
+#### Step 1 — Calculate the Mean Map
 
-The mean map is **[2, 4]**. One normalized PCA direction is approximately **[0.7071, 0.7071]**. The scores are:
+Calculate the average of each position across all three maps.
 
+$$
+\mu = \left[\frac{1+2+3}{3},\frac{3+4+5}{3}\right]
+$$
+
+$$
+\boxed{\mu=[2,4]}
+$$
+
+Subtract the mean from each original map.
+
+| Original map | Difference from mean |
+|---|---|
+| [1, 3] | [−1, −1] |
+| [2, 4] | [0, 0] |
+| [3, 5] | [1, 1] |
+
+
+
+#### Step 2 — Find the Principal Component Direction
+
+PCA identifies the direction along which the centered data varies the most. Here, both values increase together, so the direction is:
+
+$$
+[1,1]
+$$
+
+However, PCA requires a **unit direction**, meaning its length must equal 1.
+
+Calculate the length:
+
+$$
+\|[1,1]\|=\sqrt{1^2+1^2}=\sqrt{2}=1.4142
+$$
+
+Normalize the direction:
+
+$$
+v_1=\frac{[1,1]}{\sqrt{2}}
+$$
+
+$$
+\boxed{v_1=[0.7071,0.7071]}
+$$
+
+This is the first principal component direction.
+
+#### Step 3 — Compress Each Map into One PCA Score
+
+To calculate a PCA score, take the **dot product** between the centered map and the principal direction.
+
+$$
+z=(Y-\mu)\cdot v_1
+$$
+
+For the first map, `[1, 3]`:
+
+**1. Subtract the mean:**
+
+$$
+[1,3]-[2,4]=[-1,-1]
+$$
+
+**2. Calculate the dot product:**
+
+$$
+z=(-1)(0.7071)+(-1)(0.7071)
+$$
+
+$$
+\boxed{z=-1.4142}
+$$
+
+Similarly, for the third map, `[3, 5]`:
+
+$$
+z=(1)(0.7071)+(1)(0.7071)
+$$
+
+$$
+\boxed{z=1.4142}
+$$
+
+The resulting PCA scores are:
 
 | Original map | Difference from mean | PCA score |
-| --- | --- | --- |
+|---|---|---|
 | [1, 3] | [−1, −1] | −1.4142 |
 | [2, 4] | [0, 0] | 0 |
 | [3, 5] | [1, 1] | +1.4142 |
 
+**Result:** Each map has been compressed from **2 values into 1 PCA score**.
 
-To reconstruct a map, use:
+#### Step 4 — Reconstruct the Original Map
 
-`map = mean map + score × direction`
+PCA reconstructs a map using:
 
-For score `1.4142`, this gives approximately `[2,4] + [1,1] = [3,5]`.
+$$
+\boxed{\text{Map}=\text{Mean Map}+\text{Score}\times\text{Direction}}
+$$
 
-Suppose the input-to-score predictor gives **0.7071** for a new input setting. The decoder produces approximately:
+Consider the first map, whose PCA score is `−1.4142`.
 
-`[2,4] + 0.7071 × [0.7071,0.7071] = [2.5,4.5]`
+Substitute the values:
 
-That predicted score is hypothetical; it demonstrates decoding. This tiny example omits the scaling steps used in the real notebook. Also, PCA directions can have their signs reversed without changing the reconstructed maps.
+$$
+Y=[2,4]+(-1.4142)[0.7071,0.7071]
+$$
 
-### What if the PCA direction were [1, 2]?
+Multiply the score by the direction:
 
-> **Teaching example:** we keep the same centred point `[1, 1]` from the tiny map above and try a different direction. These are small illustrative numbers, not scores measured in the synthetic experiment.
+$$
+(-1.4142)[0.7071,0.7071]\approx[-1,-1]
+$$
 
-The earlier score **1.4142** came from projecting `[1, 1]` onto the direction `[1, 1]`. PCA uses directions with length 1. For a direction `[1, 2]`, first calculate its length and divide both entries by it:
+Add the mean map:
+
+$$
+Y=[2,4]+[-1,-1]
+$$
+
+$$
+\boxed{Y=[1,3]}
+$$
+
+We successfully reconstructed the original map using just **one PCA score**.
+
+Similarly, for the third map:
+
+$$
+Y=[2,4]+(1.4142)[0.7071,0.7071]
+$$
+
+$$
+Y=[2,4]+[1,1]
+$$
+
+$$
+\boxed{Y=[3,5]}
+$$
+
+In this example, reconstruction is exact (apart from rounding) because all three maps vary along the same direction.
+
+#### Step 5 — Predict a New Map Using a PCA Score
+
+Now suppose a trained model predicts a PCA score of `0.7071` for a new input setting.
+
+We can reconstruct the corresponding map without directly predicting its two output values.
+
+$$
+Y=[2,4]+0.7071[0.7071,0.7071]
+$$
+
+$$
+Y\approx[2,4]+[0.5,0.5]
+$$
+
+$$
+\boxed{Y\approx[2.5,4.5]}
+$$
+
+The predicted score is hypothetical and is used only to demonstrate reconstruction.
+
+**In the actual project**, Gaussian Process models predict PCA scores from input recipes. The PCA inverse transformation then reconstructs the spatial output maps.
+
+---
+
+### What if the PCA Direction Were [1, 2] ?
+
+Consider the same three training maps, but suppose we try a different direction:
+
+$$
+[1,2]
+$$
+
+This is an illustrative alternative direction, **not the direction PCA would select for these three maps**.
+
+#### Step 1 — Normalize the Direction
+
+Calculate its length:
+
+$$
+\sqrt{1^2+2^2}=\sqrt5=2.2361
+$$
+
+Divide each component by the length:
+
+$$
+v=\frac{[1,2]}{\sqrt5}
+$$
+
+$$
+\boxed{v=[0.4472,0.8944]}
+$$
+
+#### Step 2 — Calculate the PCA-like Projection Score
+
+Take the original map `[3, 5]`.
+
+Subtract the mean:
+
+$$
+[3,5]-[2,4]=[1,1]
+$$
+
+Project this centered map onto the new unit direction:
+
+$$
+z=[1,1]\cdot[0.4472,0.8944]
+$$
+
+$$
+z=(1)(0.4472)+(1)(0.8944)
+$$
+
+$$
+\boxed{z=1.3416}
+$$
+
+Notice that this score differs from the earlier score of `1.4142` because we are projecting onto a different direction.
+
+#### Step 3 — Reconstruct Using the New Direction
+
+Use the same reconstruction formula:
+
+$$
+\text{Map}=\text{Mean Map}+\text{Score}\times\text{Direction}
+$$
+
+Substitute:
+
+$$
+Y=[2,4]+1.3416[0.4472,0.8944]
+$$
+
+Multiply:
+
+$$
+1.3416[0.4472,0.8944]\approx[0.6,1.2]
+$$
+
+Add the mean:
+
+$$
+Y=[2,4]+[0.6,1.2]
+$$
+
+$$
+\boxed{Y\approx[2.6,5.2]}
+$$
+
+#### Step 4 — Compare the Reconstruction
+
+| | Map values |
+|---|---|
+| Original map | [3, 5] |
+| Reconstructed using [1, 1] direction | [3, 5] |
+| Reconstructed using [1, 2] direction | [2.6, 5.2] |
+
+The new direction produces reconstruction error:
+
+$$
+[3,5]-[2.6,5.2]=[0.4,-0.2]
+$$
+
+Its squared reconstruction error is:
+
+$$
+0.4^2+(-0.2)^2=\boxed{0.20}
+$$
+
+
+---
+
+### Connection to the Actual Gaussian Process Project
+
+In Process A, each input recipe generates 5 spatial output maps, each containing 10 × 10 values.
+
+Therefore:
+
+$$
+5\times10\times10=500\text{ output values}
+$$
+
+The PCA-based surrogate pipeline is:
 
 ```text
-Length = √(1² + 2²) = √5 = 2.2361
-Unit direction = [1/√5, 2/√5] = [0.4472, 0.8944]
+    Input
+      ↓
+Synthetic function
+      ↓
+500 output values per recipe
+      ↓
+PCA compression
+      ↓
+5 PCA scores per input
+      ↓
+Train 5 Gaussian Process models
+      ↓
+New input recipe
+      ↓
+Predict 5 PCA scores
+      ↓
+PCA reconstruction
+      ↓
+500 predicted output values
+      ↓
+Reshape into five 10 × 10 maps
 ```
 
-Calculate the score by multiplying corresponding entries and adding:
+The underlying idea is the same as the two-value example:
 
-```text
-Score = 1 × 0.4472 + 1 × 0.8944
-      = 1.3416
-```
+- **Compression:** Replace a high-dimensional output map with a small set of PCA scores.
+- **Prediction:** Train Gaussian Process models to predict those scores from input recipes.
+- **Reconstruction:** Combine the predicted scores with the learned PCA directions and mean to recover the output maps.
 
-Then use that one score to reconstruct the centred point:
+**Important:** PCA does not select 5 of the original 500 output values. It learns 5 directions that summarize the variation across the full output vectors. Because only 5 components are retained, reconstructed maps may have some approximation error.
 
-```text
-Reconstructed centred point = score × unit direction
-                             = 1.3416 × [0.4472, 0.8944]
-                             ≈ [0.6, 1.2]
-
-Add the original mean back:
-Reconstructed point = [2, 4] + [0.6, 1.2] = [2.6, 5.2]
-```
-
-The original point was `[3, 5]`, so this reconstruction has some error. The direction `[1, 2]` cannot represent `[1, 1]` perfectly using one score because they point in different directions. For these three tiny training maps, PCA would choose the `[1, 1]` direction (or its negative). In general, PCA learns directions from the training data to make the total squared reconstruction error as small as possible for the chosen number of components.
-
-### There are two different things to learn
-
-Let’s follow **Process A**, using the actual data sizes in the notebook, from generating examples to predicting a new output.
-
-#### 1. What does one training example contain?
-
-Process A takes **three input numbers**, called an input setting:
-
-```text
-Input setting = [input 1, input 2, input 3]
-```
-
-For each input setting, our synthetic function produces **five channels: A1 to A5**. Each channel is a 10 × 10 map containing 100 numbers.
-
-```text
-3 input numbers → 5 maps × 100 values = 500 output numbers
-```
-
-With 20 training input settings, we therefore have:
-
-| Training data | Shape |
-| --- | --- |
-| input settings | 20 rows × 3 numbers |
-| Corresponding observed outputs | 20 rows × 500 numbers |
-
-Each row describes one whole input setting and its outputs. The prediction experiment uses noisy observations of those outputs for training.
-
-#### 2. Why are there two things to learn?
+### Why are there two things to learn ?
 
 We want to predict 500 output numbers from three inputs. We split this into two jobs:
 
@@ -251,43 +476,14 @@ Job 2 — GP, Random Forest, or MLP:
 Learn how the three input numbers determine that shorter description.
 ```
 
-#### 3. First, PCA compresses the training outputs
 
-We give PCA the **20 rows of 500 output numbers**, after scaling the output channels. PCA finds an average output and five directions describing how the outputs vary between input settings. It then represents each input setting’s outputs using **five scores**:
-
-```text
-500 output values → PCA → 5 scores
-
-For all 20 input settings:
-20 rows × 500 output values → 20 rows × 5 PCA scores
-```
-
-These five scores describe the **whole collection of five maps together**. Score 1 does not mean channel A1, and score 3 does not mean channel A3. Each score can affect values across several channels and locations.
-
-The directions PCA discovers can be mixtures of the original flat, bowl, wave, bump, and diagonal patterns. We choose five components because we know how the synthetic function was built. This is a deliberate advantage of this study; other datasets may need a different number of components. Compression can still lose information, especially observation noise, which is why we check reconstruction error later.
-
-#### Check how well PCA compresses the outputs
+### Check how well PCA compresses the outputs
 
 This is a check of **PCA’s representation**. It asks how much training-output variation is retained by the selected components.
 
 ![PCA compression on training outputs](results/pca_compression.png)
 
 **Read this picture:** Each curve uses seed 10 and 80 training input settings. Move right to keep more components. The height tells us how much of the training-output variation those components retain. A retained-variance percentage is not a prediction-accuracy percentage.
-
-The table below averages five repeats at each training size. Reconstruction RMSE compares clean test maps with reconstructions made from noisy test maps using the training-fitted PCA. This is the same kind of representation check as the dotted reference introduced in Experiment 1.
-
-| Process | Training input settings | PCA variance retained | PCA reconstruction RMSE |
-| --- | ---: | ---: | ---: |
-| A | 20 | 98.04% | 0.02342 |
-| A | 40 | 97.80% | 0.01574 |
-| A | 80 | 97.62% | 0.01157 |
-| A | 160 | 97.53% | 0.00910 |
-| B | 20 | 98.16% | 0.02293 |
-| B | 40 | 97.74% | 0.01548 |
-| B | 80 | 97.46% | 0.01052 |
-| B | 160 | 97.41% | 0.00763 |
-
-This panel belongs with compression. GP uncertainty is assessed separately using interval coverage and interval width.
 
 #### 4. Next, train a model to predict those scores
 
@@ -316,11 +512,7 @@ We try three choices for this predictor:
 
 All three choices receive the same training input settings and the same PCA representation for a given comparison.
 
-That completes training: **PCA has learned how to compress and reconstruct outputs; the predictor has learned how to estimate their scores from an input setting.** PCA alone needs an output map to calculate its scores. The predictor lets us estimate scores when we have only the input setting.
-
-#### 5. What happens when a new input setting arrives?
-
-This step is called **inference**, meaning using what we already learned to make a prediction. We give the trained pipeline the three input numbers. Its output maps are unknown to the predictor.
+#### 5. Inference ?
 
 ```text
 New input setting: 3 inputs
@@ -347,7 +539,7 @@ Reconstructed output in scaled units
     + predicted score 5 × learned direction 5
 ```
 
-The notebook also rescales the numbers so the methods can work with values of comparable size. During training, it learns input scaling, channel scaling, PCA, and score scaling using the training examples only.
+We also rescales the numbers so the methods can work with values of comparable size. During training, it learns input scaling, channel scaling, PCA, and score scaling using the training examples only.
 
 For a new input setting, the exact order is:
 
@@ -364,18 +556,49 @@ We reuse the learned settings. The new input setting’s true outputs are not us
 Think of **PCA as a way to translate 500 map values into five scores**, and translate those scores back into maps. The predictor learns to estimate those five scores from an input setting.
 
 ```text
-TRAINING
-20 input settings                         Their 20 observed outputs
-3 inputs per input setting                500 map values per input setting
-                                            ↓
-                                    Fit PCA on these maps
-                                            ↓
-                                    5 scores per input setting
-         │                                  │
-         └─────────────────┬────────────────┘
-                           ↓
-                   Train the predictor:
-                    3 inputs → 5 scores
+TRAINING — PROCESS A
+
+20 Input Recipes                     20 Observed Output Maps
+(3 variables each)                   (500 values per recipe)
+      │                                       │
+      │                                       ▼
+      │                              Fit PCA on Output Maps
+      │                                       │
+      │                              500 Values → 5 Scores
+      │                                       │
+      │                              20 × 5 PCA Score Matrix
+      │                                       │
+      └───────────────────┬───────────────────┘
+                          │
+                          ▼
+                Train 5 Gaussian Processes
+                (3 Inputs → 5 PCA Scores)
+                One GP per PCA Score
+                          │
+                          ▼
+                   Trained GP Models
+
+
+PREDICTION — PROCESS A
+
+                  New Input Recipe
+                    (3 Variables)
+                          │
+                          ▼
+                 5 Trained GP Models
+                          │
+                          ▼
+                 5 Predicted PCA Scores
+                          │
+                          ▼
+                 Inverse PCA Transform
+                          │
+                          ▼
+                500 Predicted Values
+                          │
+                          ▼
+                Reshape into 5 Maps
+                  (10 × 10 Each)
 ```
 
 We save PCA, the predictor, and the scaling settings. At inference, the PCA steps stay the same for all three methods:
@@ -394,27 +617,6 @@ The saved scaling steps are applied and reversed in each pipeline. The new input
 | Random Forest | Many decision trees whose predictions are averaged to produce five scores |
 | MLP | Neural-network weights that turn three inputs into five scores |
 
-After prediction, we use test outputs for two checks:
-
-| Check in this notebook | GP | Random Forest | MLP |
-| --- | --- | --- | --- |
-| Compare predicted maps with clean ground-truth maps using RMSE | Yes | Yes | Yes |
-| Check predicted score intervals against observed scores | Yes | Not implemented | Not implemented |
-
-The GP returns uncertainty for its scores. The later uncertainty section checks those ranges. Random Forest and MLP follow the same training, reconstruction, and RMSE flow; our implementations do not return score intervals.
-
-#### 6. Where does the A3 value −0.090171 fit?
-
-Earlier, the synthetic function gave **−0.090171 at one selected location in A3**, for input setting `[0.2, 0.6, 0.8]`.
-
-If we ask the trained pipeline to predict that input setting, it produces all 500 output values. One of them corresponds to that exact A3 location. We could then compare:
-
-```text
-True value from the synthetic function: −0.090171
-Predicted value from the trained model: whatever the model produces
-```
-
-The earlier table calculates the true value. It does not report a trained-model prediction for this input setting. This input setting is a walkthrough example; the benchmark uses its own randomly sampled, held-out test input settings.
 
 #### 7. How this leads into Experiment 1
 
@@ -430,10 +632,11 @@ Experiment 1 asks: **Which pipeline predicts unseen input settings most accurate
 
 We train with 20, 40, 80, and 160 input settings, then compare the predicted maps with the true synthetic maps for separate test input settings. The test answers are used to measure error after prediction; they are never used to fit PCA or train the predictors.
 
-*Notebook connection: cell 5 defines preprocessing, the GP, reconstruction, and the error calculation; cell 6 performs training and inference repeatedly.*
+~~~text
+Training Input = 20: 20*3 Input matrix / 20*500 Output matrix / 20*5 PCA Scores
+~~~
 
-
-## 3. Experiment 1 — Find out which predictor works best here
+## 3. Experiment 1 — Best predictor surrogate selection
 
 ### Set up a fair test
 
@@ -529,8 +732,6 @@ Separate test set: 120 input settings → assess every training size
 
 For the **20-setting experiment**, the other 140 training-pool input settings do not participate in fitting. The test input settings come from a separate random draw. Whole input settings stay in one set; pixels from one input setting are not divided between training and testing.
 
-Because this is a synthetic study, we can calculate the correct outputs for new input settings using the known function. With measured data, obtaining those test outputs would require additional measurements or experiments.
-
 ### Turn prediction errors into a score
 
 > **Teaching example:** true values `[2,4]`, predicted values `[2.5,3.5]`.
@@ -615,16 +816,11 @@ So **0.03583 ± 0.00278 means the GP’s average test error and how much that er
 
 ### Exactly what do the dashed gray and dotted lines compare?
 
-Both lines calculate RMSE against the **same correct answer: the clean synthetic outputs of all 120 test input settings**.
-
-What changes is the output we compare with that answer:
-
 | Line | What we compare with the clean test outputs |
 | --- | --- |
 | **Dashed gray: average-map baseline** | The average of the **training maps**, repeated for every test input setting |
 | **Dotted: PCA diagnostic** | Each test input setting’s **noisy output maps after PCA compression and reconstruction** |
 
-The average training map is calculated separately at each matching channel and location. The dotted line uses the saved PCA and output scaling learned on training data to compress and reconstruct the noisy test maps.
 
 > **Teaching example:** the following values illustrate one comparison. They are not measured values from the experiment.
 
@@ -656,13 +852,11 @@ Then we repeat the experiment five times and plot the average RMSE. For Process 
 
 The key difference: **the gray line uses training outputs to make its guess; the dotted line uses the noisy test outputs themselves to make its reconstruction.** Both are checked against the clean test outputs. The dotted line checks compression and reconstruction; its access to noisy test outputs means it does not measure prediction from an input setting alone.
 
-### Why include these two reference lines?
-
 The **dashed gray line** asks: “Does using the input setting actually help?” It always predicts the average training maps. A model below this line has lower error than always guessing the average. All three trained methods beat this baseline in our experiment.
 
 The **dotted PCA line** asks: “How much error comes from compressing and reconstructing maps?” It receives noisy test maps and passes them through PCA, without using GP, Random Forest, or MLP. Low error suggests that five scores can describe the maps well. If a trained model has much higher error, predicting scores from the input setting is likely a bigger difficulty than representing the maps with PCA.
 
-This is a guide rather than an exact separation of errors. The dotted line starts with noisy test outputs, so it is not a guaranteed minimum prediction error. **The gray line checks whether learning helps; the dotted line checks whether PCA represents the outputs well.**
+ **The gray line checks whether learning helps; the dotted line checks whether PCA represents the outputs well.**
 
 **Measured finding:** GP has the lowest mean error at all tested sizes in this final configuration. At 20 input settings, A’s GP error is 0.03583 and B’s is 0.07763. This supports GP for these particular low-data, smooth synthetic tasks. It does not establish that GP is universally best.
 
@@ -715,12 +909,23 @@ Across many predictions, the aim is for these intervals to contain the observed 
 We already have the test input setting’s noisy observed maps. Pass them through the **saved PCA and scaling** to calculate their five observed scores.
 
 ```text
-Test input values → GP → predicted score 1 and its interval
-
-Observed test maps → saved PCA and scaling → observed score 1
+120 Test Input Recipes
+          │
+          ├──→ Synthetic Function
+          │          ↓
+          │     Test Output Maps
+          │          ↓
+          │     PCA Encoder
+          │          ↓
+          │     5 Observed PCA Scores
+          │
+          └──→ 5 Trained GP Models
+                     ↓
+              Predicted Mean ± 1.96 × SD
+                     ↓
+          Compare observed PCA scores
+          with GP prediction intervals
 ```
-
-PCA is reused here; it is not trained again. Suppose the observed score 1 is **3.4**:
 
 ```text
 Predicted interval: [2.02, 3.98]
@@ -730,8 +935,6 @@ Inside? Yes.
 ```
 
 If the observed score were **4.3**, the answer would be **No**.
-
-**Why use PCA if we already have the ground truth?** We have maps containing 500 values, while the GP’s intervals describe five scores. PCA converts the maps into the same form as the quantities the GP predicts. We cannot directly compare a score interval with map values.
 
 | What we check | What we compare |
 | --- | --- |
@@ -791,367 +994,361 @@ We therefore check both:
 
 **Read this picture:** The left panel shows measured coverage. Compare each curve with the dashed 95% target line. The right panel shows mean interval width in standardized-score units. We want coverage near its intended level together with useful, reasonably narrow ranges. Narrower ranges alone do not prove better uncertainty.
 
-Only these two panels belong in the GP uncertainty check. The PCA variance panel has been moved to the compression explanation because it answers a separate question.
-
-Here, **95% refers to coverage of individual score intervals across many checks**. It does not mean the maps are 95% accurate or that the whole map is covered with 95% probability. These checks also omit some uncertainty associated with learning the PCA representation.
-
 **Why move on?** GP predicted reasonably well here and gives an uncertainty estimate we can inspect. The next question is whether those predictions can help us decide which input to evaluate. That requires a separate experiment.
-
-*Notebook connection: cells 6–9 generate the comparison, learning curves, map examples, and uncertainty checks.*
-
 
 ## 4. Experiment 2 — PCA + GP BO
 
-**Experiment 2 uses the PCA+GP model to choose input settings that produce outputs close to a desired target.**
+Experiment 1 showed that **PCA + GP can predict output maps accurately and provide uncertainty estimates**. Experiment 2 uses those predictions and uncertainties to decide which input recipe to evaluate next.
 
-It repeatedly does this:
+We will follow **one complete BO iteration for Process A**, using the same setup as your experiment.
 
-```text
-Predict what might happen → choose one input setting → evaluate it
-→ observe what actually happened → update the model → choose again
-```
+### Step 0 — What we already have
 
-Let’s follow **Process A, seed 10**, from beginning to end. All numerical values below come from the executed synthetic experiment.
+Suppose we have evaluated 20 initial input recipes.
 
-### 1. What goes into the process, and what comes out?
-
-One input setting contains three numbers:
+For each recipe:
 
 ```text
-[input 1, input 2, input 3]
+3 Input Values
+      ↓
+Synthetic Function + Noise
+      ↓
+500 Observed Output Values
+      ↓
+PCA Encoder
+      ↓
+5 PCA Scores
 ```
 
-The synthetic function takes these numbers and produces five output maps. Each map has 10 × 10 values:
+We train five GPs to predict these scores from the three input values.
+
+We also have a fixed target containing 500 desired output values.
+
+Among our 20 initial recipes, suppose the lowest observed target-matching MSE is:
+
+\[
+\boxed{\text{Best MSE}=0.0037}
+\]
+
+Our goal is to find a new recipe with an even smaller MSE.
+
+### Step 1 — Predict the candidate recipes
+
+Python generates 1,500 candidate recipes. These have not been evaluated using the synthetic function.
+
+Consider three candidates from that pool:
+
+| Candidate | Input recipe |
+|---|---|
+| A | [0.2, 0.6, 0.8] |
+| B | [0.4, 0.7, 0.5] |
+| C | [0.8, 0.3, 0.2] |
+
+For each candidate, the five trained GPs predict five PCA-score means and five standard deviations.
+
+For example, candidate B might have:
+
+| PCA score | Predicted mean | Standard deviation |
+|---|---:|---:|
+| 1 | 0.50 | 0.10 |
+| 2 | −0.20 | 0.15 |
+| 3 | 0.80 | 0.20 |
+| 4 | 0.30 | 0.10 |
+| 5 | −0.40 | 0.25 |
+
+These are illustrative standardized scores.
+
+**What does this mean?** The GPs believe candidate B will produce PCA scores close to `[0.50, −0.20, 0.80, 0.30, −0.40]`, but they are uncertain about the exact values.
+
+We have not yet evaluated candidate B.
+
+### Step 2 — Generate 128 possible outcomes
+
+Instead of assuming the GP means are exactly correct, BO considers uncertainty.
+
+For candidate B, we sample 128 possible sets of five scores from the GP predictive distributions.
+
+For simplicity, imagine only three samples:
+
+| Sample | Five possible PCA scores |
+|---|---|
+| 1 | [0.52, −0.15, 0.75, 0.32, −0.35] |
+| 2 | [0.45, −0.25, 0.90, 0.28, −0.50] |
+| 3 | [0.60, −0.10, 0.70, 0.35, −0.20] |
+
+Each sample represents one possible output of candidate B.
+
+We then reconstruct the full maps:
 
 ```text
-3 input values → 5 maps × 100 values = 500 output values
+5 Sampled PCA Scores
+          ↓
+Reverse Score Scaling
+          ↓
+Saved PCA Decoder
+          ↓
+Reverse Channel Scaling
+          ↓
+500 Possible Output Values
+          ↓
+Compare with 500 Target Values
+          ↓
+One Possible Target-Matching MSE
 ```
 
-The output maps describe how the process behaved at that input setting.
+Suppose the three reconstructed outcomes give:
 
-In this experiment, **evaluating an input setting** means running the synthetic function and adding observation noise. The resulting maps are our observed data.
+| Sample | Possible MSE |
+|---|---:|
+| 1 | 0.0020 |
+| 2 | 0.0050 |
+| 3 | 0.0010 |
 
-### 2. What output do we want?
+These are **predicted possibilities, not actual synthetic function evaluations**.
 
-Before searching, we define five **target maps** containing the 500 output values we want the process to produce.
+### Step 3 — Calculate Expected Improvement
 
-In the notebook, we create those target maps using:
+Our best observed MSE is 0.0037.
+
+For each possible outcome, calculate how much better it would be than our current best:
+
+\[
+\text{Improvement}=\max(0,\text{Best MSE}-\text{Sampled MSE})
+\]
+
+| Sample | Possible MSE | Improvement |
+|---|---:|---:|
+| 1 | 0.0020 | 0.0017 |
+| 2 | 0.0050 | 0 |
+| 3 | 0.0010 | 0.0027 |
+
+For sample 2, MSE is worse than 0.0037, so improvement is zero.
+
+Average the improvements:
+
+\[
+EI=\frac{0.0017+0+0.0027}{3}
+\]
+
+\[
+\boxed{EI\approx0.00147}
+\]
+
+In the actual experiment, we average over **128 samples**, not three.
+
+BO calculates EI for all remaining candidate recipes.
+
+Suppose the results are:
+
+| Candidate | Expected Improvement |
+|---|---:|
+| A | 0.0008 |
+| B | 0.0015 |
+| C | 0.0004 |
+
+**BO selects candidate B because it has the highest Expected Improvement.**
+
+Notice that BO does not simply choose the candidate with the lowest predicted mean MSE. EI considers both predicted performance and uncertainty.
+
+### Step 4 — Evaluate the selected candidate
+
+Now, for the first time, we actually evaluate candidate B.
 
 ```text
-[0.35, 0.65, 0.45] → synthetic function → target maps
+Selected Recipe B
+[0.4, 0.7, 0.5]
+        ↓
+Synthetic Function
+        ↓
+500 Clean Output Values
+        ↓
+Add Observation Noise
+        ↓
+500 Observed Output Values
+        ↓
+Compare with Target Maps
+        ↓
+Observed MSE = 0.0018
 ```
 
-That is how we construct the desired result for this synthetic example.
+Our previous best was 0.0037.
 
-The search receives the **target maps to match**. We do not give it those three input numbers as a suggested solution.
+Since:
 
-We want an input setting that produces similar **outputs**. Its input numbers do not necessarily need to equal `[0.35, 0.65, 0.45]`.
+\[
+0.0018 < 0.0037
+\]
 
-### 3. How do we decide whether an input setting is good?
+candidate B becomes our new best observed recipe.
 
-After evaluating an input setting, compare its 500 observed output values with the 500 matching target values.
+**Important:** The GP did not directly predict this observed MSE. We calculated it after evaluating the selected recipe.
 
-At every channel and location:
+### Step 5 — Update the Gaussian Processes
+
+We now have one new input-output example.
+
+To update the GPs, we cannot directly use the 500 observed output values because each GP is trained to predict a PCA score.
+
+Therefore, we encode the new observation:
 
 ```text
-Squared difference = (observed value − target value)²
+Selected Input Recipe B
+[0.4, 0.7, 0.5]
+          │
+          ├──────────────────────┐
+          │                      │
+          │               500 Observed Values
+          │                      ↓
+          │                Saved PCA Encoder
+          │                      ↓
+          │                5 Observed Scores
+          │                      │
+          └──────────┬───────────┘
+                     ↓
+             Add Training Example
+                     ↓
+          Refit the 5 Gaussian Processes
+                     ↓
+             21 Training Examples
 ```
 
-Then average all 500 squared differences:
+The PCA encoder, decoder and scaling settings remain fixed. Only the GPs are refitted using the additional observation.
+
+The GPs now have more information about how input recipes relate to PCA scores, which may improve their predictions and uncertainty estimates.
+
+### Step 6 — Repeat the process
+
+We repeat the same procedure for the remaining iterations:
 
 ```text
-MSE = sum of the 500 squared differences ÷ 500
+1,500 Candidate Recipes Initially
+               ↓
+5 GPs Predict Scores and Uncertainty
+               ↓
+128 Samples per Candidate
+               ↓
+PCA Reconstruction
+               ↓
+Calculate Possible MSEs
+               ↓
+Calculate Expected Improvement
+               ↓
+Select Highest-EI Candidate
+               ↓
+Evaluate Using Synthetic Function
+               ↓
+Encode Observed Maps into PCA Scores
+               ↓
+Refit the GPs
+               ↓
+Repeat for 24 BO Iterations
 ```
 
-This gives **one number for that input setting**.
+The total number of actual evaluations is:
 
-- Small MSE: its outputs are close to the target.
-- Large MSE: its outputs are farther from the target.
-- Zero MSE: all 500 values match exactly.
+\[
+20\text{ initial}+24\text{ BO-selected}=\boxed{44}
+\]
 
-This MSE describes target matching. It is different from Experiment 1’s RMSE, which measured how accurately a model predicted test outputs.
+### Why don't the 128 Monte Carlo samples count as actual evaluations?
 
-### 4. What information do we already have?
+The 128 Monte Carlo samples are **simulated predictions made by the GPs, not 128 actual runs of the synthetic function**.
 
-We start with the same **20 training input settings and their observed maps** from Experiment 1.
-
-Those initial settings were randomly generated by Python. BO did not choose them.
-
-For each setting, we already have:
+For one candidate recipe:
 
 ```text
-Three input values + 500 observed output values
+             One Candidate Recipe
+               [0.4, 0.7, 0.5]
+                       |
+                       v
+                5 Trained GPs
+                       |
+                       v
+          Predict Means and Std. Devs.
+                       |
+                       v
+          Draw 128 Possible Score Sets
+                       |
+                       v
+           PCA Decoder for Each Set
+                       |
+                       v
+             128 Possible Maps
+                       |
+                       v
+           Calculate 128 Possible MSEs
+                       |
+                       v
+             Expected Improvement
 ```
 
-We compare those existing observed maps with the target maps. That lets us judge how good the initial settings already are.
+We never call the synthetic function during these 128 simulations.
 
-For this run, the best initial result was:
+We only use the trained GP models to estimate what the candidate might produce.
+
+After calculating Expected Improvement for all candidates, BO selects the candidate with the highest EI.
+
+Only then:
 
 ```text
-Initial trial 16:
-[0.404000, 0.836557, 0.450986]
-
-Observed MSE = 0.0037239
+Selected Candidate
+        ↓
+Actual Synthetic Function
+        ↓
+500 Clean Output Values
+        ↓
+Add Observation Noise
+        ↓
+500 Observed Output Values
+        ↓
+Update GP Training Data
 ```
 
-So our starting question is:
+That is **one actual process evaluation**.
 
-> Can BO find an input setting whose observed MSE is lower than 0.0037239?
+Suppose we have:
 
-The separate test examples from Experiment 1 are not used to guide this search.
+- 1,500 candidate recipes.
+- 128 Monte Carlo samples per candidate.
+- 24 Bayesian Optimization iterations.
 
-### 5. Where does PCA+GP fit into this?
+At the first iteration, we generate:
 
-We rebuild the same prediction pipeline using those 20 training examples.
+\[
+1500\times128=\boxed{192,000}
+\]
 
-First, PCA compresses each observed collection of 500 values into five scores:
+possible simulated outcomes.
 
-```text
-500 observed output values → PCA → five scores
-```
+But we evaluate only **one selected recipe** using the actual synthetic function.
 
-Then five GPs learn to predict those scores from the input setting:
+Across the experiment:
 
-```text
-Three input values → five GPs → five predicted scores
-```
+| Operation | Count |
+|---|---:|
+| Initial synthetic function evaluations | 20 |
+| Additional BO-selected evaluations | 24 |
+| **Total actual process evaluations** | **44** |
+| Monte Carlo simulations | Up to 192,000 per BO iteration |
 
-The saved PCA decoder converts predicted scores back into maps:
+As evaluated candidates are removed, fewer candidates remain in subsequent iterations.
 
-```text
-Five predicted scores → PCA decoder → 500 predicted output values
-```
+**The key idea:** The GP allows BO to explore thousands of possible outcomes computationally, while spending only one actual process evaluation per iteration.
 
-The scaling steps prepare the numbers for the models and convert them back afterward.
+This is particularly valuable when the real process is expensive, such as running a semiconductor manufacturing experiment that takes hours or costs money.
 
-**The GPs still predict PCA scores. They are not trained to predict MSE directly.**
+### Main Distinction to Remember
 
-MSE is calculated afterward by comparing the reconstructed maps with the target maps.
+| Operation | What it does |
+|---|---|
+| GP prediction | Predicts five PCA scores and their uncertainty |
+| PCA decoder | Reconstructs possible 500-value output maps |
+| MSE | Measures how closely a map matches the desired target |
+| Expected Improvement | Estimates how promising an unevaluated candidate is |
+| Synthetic function | Produces the actual observation for the selected recipe |
+| PCA encoder | Converts the new observed map into scores for GP retraining |
 
-### 6. Where do the possible new input settings come from?
-
-Python generates a list of **1,500 candidate input settings**, with each input between 0 and 1.
-
-For each candidate, we initially know only its three input numbers. We have not evaluated its outputs.
-
-The candidate list is created once. BO repeatedly chooses from its remaining untried entries.
-
-So the roles are:
-
-```text
-Python generates possible input settings.
-GP predicts what their outputs might be.
-BO chooses which one to evaluate next.
-```
-
-### 7. What does the GP predict for a candidate?
-
-The first candidate selected in this run had these inputs:
-
-```text
-[0.627722, 0.660143, 0.450525]
-```
-
-Before evaluating it, the GPs predicted:
-
-| PCA score | Predicted value | Standard deviation |
-| --- | ---: | ---: |
-| 1 | −0.3738 | 0.0482 |
-| 2 | −0.9013 | 0.0588 |
-| 3 | +0.7825 | 0.1363 |
-| 4 | −1.1006 | 0.2604 |
-| 5 | −0.6643 | 0.9498 |
-
-The predicted value is the GP’s best guess for that score.
-
-The standard deviation describes uncertainty about that guess. A larger value means more uncertainty.
-
-These are standardized PCA scores. They are neither map values nor target-matching errors.
-
-At this point, we still have not observed what this candidate actually produces.
-
-### 8. How does BO use those predictions to choose a candidate?
-
-BO needs to consider both:
-
-- How good the candidate’s outputs might be.
-- How uncertain those outputs are.
-
-For each candidate, we generate **128 possible sets of five scores** using the GP’s predicted values and uncertainties.
-
-Each possible set is decoded into maps and compared with the target:
-
-```text
-Possible set of five scores
-              ↓
-Decode into 500 possible output values
-              ↓
-Compare with the target maps
-              ↓
-One possible MSE
-```
-
-For the candidate above, the first five possible MSEs were:
-
-```text
-0.0021921
-0.0008005
-0.0005324
-0.0003093
-0.0012790
-```
-
-These are possibilities generated by the model, not observed trial results.
-
-Our current best observed MSE is **0.0037239**. For each possible outcome, calculate:
-
-```text
-Improvement = max(0.0037239 − possible MSE, 0)
-```
-
-A possible result worse than our current best contributes zero improvement.
-
-Average the improvements across all 128 possibilities. This estimates **Expected Improvement**.
-
-For this candidate:
-
-```text
-Estimated Expected Improvement = 0.0027989
-```
-
-BO performs the same calculation for the other candidates. This candidate has the highest estimated improvement, so BO chooses it.
-
-**The 128 possibilities are computer calculations. They are not 128 new process trials.**
-
-### 9. What happens after BO chooses the input setting?
-
-Now we actually evaluate it:
-
-```text
-Selected inputs:
-[0.627722, 0.660143, 0.450525]
-              ↓
-Run the synthetic function and add observation noise
-              ↓
-Obtain five observed maps
-              ↓
-Compare all 500 values with the target maps
-              ↓
-Observed MSE = 0.0017529
-```
-
-Now we have an actual observed result:
-
-```text
-Previous best observed MSE: 0.0037239
-New observed MSE:           0.0017529
-```
-
-The new input setting performs better, so it becomes our current recommendation.
-
-This is **trial 21**: the original 20 trials plus one BO-selected trial.
-
-### 10. What exactly do we use to update the model?
-
-We have newly observed maps from trial 21. Convert those maps into five scores using the saved PCA and scaling.
-
-The calculated scores were:
-
-```text
-[−0.3872, −0.9610, +0.9213, −0.7641, −0.6825]
-```
-
-We add this training example:
-
-```text
-Input setting:
-[0.627722, 0.660143, 0.450525]
-
-Observed scores:
-[−0.3872, −0.9610, +0.9213, −0.7641, −0.6825]
-```
-
-Before choosing the next candidate, refit the five GPs using **21 examples instead of 20**.
-
-PCA and the scaling settings remain fixed. This keeps the meaning of each score consistent.
-
-There are two separate uses of the new maps:
-
-| Use | What we calculate |
-| --- | --- |
-| Decide whether the trial improved our result | MSE against the target maps |
-| Teach the GPs what happened at these inputs | PCA scores calculated from the observed maps |
-
-We do not treat the model’s guesses for untried candidates as observations.
-
-### 11. How does the loop continue, and when does it stop?
-
-Using the updated GPs:
-
-```text
-Predict remaining candidates
-              ↓
-Estimate their improvement
-              ↓
-BO selects another input setting
-              ↓
-Evaluate it and obtain observed maps
-              ↓
-Update the GPs before the next choice
-```
-
-The next actual results were:
-
-| Trial | Observed MSE of that trial | Best observed MSE so far |
-| --- | ---: | ---: |
-| 21 | **0.0017529** | **0.0017529** |
-| 22 | 0.0018409 | 0.0017529 |
-| 23 | 0.0020848 | 0.0017529 |
-
-Trials 22 and 23 added information but did not improve the best result.
-
-We stop after **24 additional trials**:
-
-```text
-20 initial trials + 24 additional trials = 44 total trials
-```
-
-In this particular run, trial 21 remained the best observed result through trial 44.
-
-The final recommendation is the input setting with the lowest **observed** MSE among the trials we actually performed.
-
-### 12. How do we check whether BO helped?
-
-We compare it with random search.
-
-Both methods receive:
-
-```text
-The same initial 20 observations
-The same target maps
-The same candidate list
-24 additional trials
-```
-
-Random search chooses its additional settings randomly. BO chooses using the PCA+GP model.
-
-After each method selects its final recommendation, we assess that recommendation using the clean synthetic function, without added noise:
-
-| Method, Process A, seed 10 | Clean MSE of recommended setting |
-| --- | ---: |
-| PCA+GP BO | **0.0006158** |
-| Random search | 0.0022203 |
-
-The clean errors are used only for assessment. They do not guide the search or determine which setting it recommends.
-
-Across five starting datasets, BO produced a better recommendation than random search in all five runs for both processes.
-
-**The essential connection is that Experiment 1 builds the map predictor; Experiment 2 repeatedly uses that predictor to select a new input setting, obtains a fresh observation, and learns from it.**
-
-![PCA+GP Bayesian optimization compared with random search](results/pca_bo_curves.png)
-
-The graph shows median clean MSE across five runs, with the middle half shaded. The horizontal axis counts all trials, including the initial 20, and the vertical scale is logarithmic. A recommendation’s clean error can rise because recommendations use noisy observations.
-
+**Experiment 1 is about predicting outputs accurately. Experiment 2 is about using those predictions and their uncertainty to select better input recipes with fewer actual evaluations.**
 
 ## 5. Experiment 3 — Ask for one output value using an ID
 
