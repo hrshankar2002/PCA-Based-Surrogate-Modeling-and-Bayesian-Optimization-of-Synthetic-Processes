@@ -1,52 +1,6 @@
 # Gaussian Processes and Bayesian Optimization
-## Illustrated, from-scratch refresher: Gaussian distributions → GP priors → regression → acquisition functions → Probability of Improvement
 
-> **Illustrated edition:** Figures are stored in the adjacent `GP_BO_illustrated_assets/` folder. Keep the Markdown file and this folder together.
->
-> **Purpose:** Read this document on its own to rebuild the concepts discussed in the lecture slides, including the specific points that were confusing. It starts with basic probability and moves gradually to the maximization of Probability of Improvement (PI).
->
-> **Scope:** Primarily scalar-valued regression and **maximization** of an expensive, unknown objective. Numerical examples are illustrative unless explicitly identified as calculations.
-
----
-
-## How to use this guide
-
-- **If you have forgotten everything:** Start at Section 1 and follow the examples.
-- **If you remember Gaussian distributions but not GPs:** Start at Section 3.
-- **If you understand GP regression but not BO:** Start at Section 8.
-- **If you forget how samples become predictions:** Jump to the **illustrated Section 6.6** (prior → posterior → sampled functions → query $x_*$ → mean/variance).
-- **If you only need to revisit the latest question:** Read Sections 9–11, especially *why maximizing a monotonic CDF is equivalent to maximizing its input*.
-- **Before a quiz or interview:** Read the complete BO iteration (Section 12), then test yourself against the three traps (Section 11.6).
-
-### The complete storyline
-
-```text
-Gaussian distribution: uncertainty about a number
-        ↓
-Multivariate Gaussian: uncertainty about several related numbers
-        ↓
-Gaussian Process (GP): uncertainty about an entire function
-        ↓
-GP prior: possible functions before observing training data
-        ↓
-Condition on observed data → GP posterior
-        ↓
-At a new x*: predicted mean μ(x*) and uncertainty σ(x*)
-        ↓
-Bayesian Optimization (BO): choose which x to evaluate next
-        ↓
-Acquisition function: score how useful each candidate x is
-        ↓
-PI: probability of beating the best observed value
-        ↓
-Maximize PI (or its standardized input) to choose x_next
-        ↓
-Evaluate true objective at x_next; update GP; repeat
-```
-
----
-
-# Part I — Probability foundations
+# Part I — Probability Foundations
 
 ## 1. Gaussian distributions: one variable, multiple variables, and uncertainty
 
@@ -144,8 +98,8 @@ For two variables:
 
 $$
 \Sigma=\begin{bmatrix}
-\operatorname{Var}(X_1)&\operatorname{Cov}(X_1,X_2)\\
-\operatorname{Cov}(X_2,X_1)&\operatorname{Var}(X_2)
+\mathrm{Var}(X_1)&\mathrm{Cov}(X_1,X_2)\\
+\mathrm{Cov}(X_2,X_1)&\mathrm{Var}(X_2)
 \end{bmatrix}.
 $$
 
@@ -155,10 +109,10 @@ $$
 For instance, the covariance of a variable with itself is its variance:
 
 $$
-\operatorname{Cov}(X_1,X_1)=\operatorname{Var}(X_1).
+\mathrm{Cov}(X_1,X_1)=\mathrm{Var}(X_1).
 $$
 
-This is precisely why later, in GP regression, $k(x_*,x_*)$ represents the **prior variance** at the new point.
+This is precisely why later, in GP regression, $k(x_{\ast},x_{\ast})$ represents the **prior variance** at the new point.
 
 A univariate Gaussian is the special case of a multivariate Gaussian with just one component.
 
@@ -205,7 +159,7 @@ Your lecture often assumes $m(x)=0$ for convenience. **That does not mean every 
 ### 3.2 Covariance function / kernel
 
 $$
-k(x,x')=\operatorname{Cov}\big(f(x),f(x')\big).
+k(x,x')=\mathrm{Cov}\big(f(x),f(x')\big).
 $$
 
 The kernel tells us how strongly **function values** at two inputs tend to move together. It is calculated using the **input locations** $x,x'$.
@@ -274,12 +228,12 @@ $$
 
 For $N$ input points, $K$ has size $N\times N$.
 
-### Critical confusion resolved: $k(x_*,x_*)$ versus $k(x_i,x_*)$
+### Critical confusion resolved: $k(x_{\ast},x_{\ast})$ versus $k(x_i,x_{\ast})$
 
-- $k(x_*,x_*)$ = covariance of $f(x_*)$ **with itself** = **prior variance at the query point**.
-- $k(x_i,x_*)$ = covariance of $f(x_i)$ **with $f(x_*)$** = relationship between the training value and query value.
+- $k(x_{\ast},x_{\ast})$ = covariance of $f(x_{\ast})$ **with itself** = **prior variance at the query point**.
+- $k(x_i,x_{\ast})$ = covariance of $f(x_i)$ **with $f(x_{\ast})$** = relationship between the training value and query value.
 
-We use **both** when conditioning on training observations to predict at $x_*$. They perform different jobs.
+We use **both** when conditioning on training observations to predict at $x_{\ast}$. They perform different jobs.
 
 ## 5. What happens after creating $K$? Cholesky and sampling function curves
 
@@ -317,9 +271,9 @@ Why does multiplying by $L$ work?
 
 $$
 \begin{aligned}
-\operatorname{Cov}(\mathbf f)
-&=\operatorname{Cov}(L\mathbf z)\\
-&=L\operatorname{Cov}(\mathbf z)L^T\\
+\mathrm{Cov}(\mathbf f)
+&=\mathrm{Cov}(L\mathbf z)\\
+&=L\mathrm{Cov}(\mathbf z)L^T\\
 &=LIL^T\\
 &=LL^T=K.
 \end{aligned}
@@ -390,7 +344,7 @@ $$
 D=\lbrace(x_1,y_1),(x_2,y_2),(x_3,y_3)\rbrace.
 $$
 
-We now want $f(x_*)$ at a new input $x_*$.
+We now want $f(x_{\ast})$ at a new input $x_{\ast}$.
 
 **Before using these observations:** the GP describes all functions plausible under the prior.
 
@@ -400,13 +354,13 @@ For *noiseless* observations, the posterior functions are constrained to pass th
 
 ### 6.1 The joint Gaussian
 
-For a zero-mean GP, training function values $\mathbf f$ and the query value $f_*$ satisfy
+For a zero-mean GP, training function values $\mathbf f$ and the query value $f_{\ast}$ satisfy
 
 $$
-\begin{bmatrix}\mathbf f\\f_*\end{bmatrix}
+\begin{bmatrix}\mathbf f\\f_{\ast}\end{bmatrix}
 \sim\mathcal N\left(
 \begin{bmatrix}\mathbf0\\0\end{bmatrix},
-\begin{bmatrix}K&\mathbf k_*\\\mathbf k_*^T&k_{**}\end{bmatrix}
+\begin{bmatrix}K&\mathbf k_{\ast}\\\mathbf k_{\ast}^T&k_{\ast\ast}\end{bmatrix}
 \right).
 $$
 
@@ -415,11 +369,11 @@ Here:
 | Symbol | Meaning | Size for 3 training points, 1 query |
 |---|---|---|
 | $K$ | Covariances **between training points** | $3\times3$ |
-| $\mathbf k_*$ | Covariances **between training and query** | $3\times1$ |
-| $\mathbf k_*^T$ | Same cross-covariances, transposed | $1\times3$ |
-| $k_{**}=k(x_*,x_*)$ | Query point's **prior variance** | $1\times1$ |
+| $\mathbf k_{\ast}$ | Covariances **between training and query** | $3\times1$ |
+| $\mathbf k_{\ast}^T$ | Same cross-covariances, transposed | $1\times3$ |
+| $k_{\ast\ast}=k(x_{\ast},x_{\ast})$ | Query point's **prior variance** | $1\times1$ |
 
-If you have multiple query locations, the bottom-right block becomes a full **query-to-query covariance matrix** $K_{**}$.
+If you have multiple query locations, the bottom-right block becomes a full **query-to-query covariance matrix** $K_{\ast\ast}$.
 
 ### 6.2 Conditioning: the central GP operation
 
@@ -428,25 +382,25 @@ If you have multiple query locations, the bottom-right block becomes a full **qu
 Because the joint distribution is Gaussian, conditioning yields another Gaussian. In the zero-mean, **noiseless** case,
 
 $$
-\boxed{f_*\mid D\sim\mathcal N(\mu_*,\sigma_*^2)}
+\boxed{f_{\ast}\mid D\sim\mathcal N(\mu_{\ast},\sigma_{\ast}^2)}
 $$
 
 with
 
 $$
-\boxed{\mu_*=\mathbf k_*^T K^{-1}\mathbf y}
+\boxed{\mu_{\ast}=\mathbf k_{\ast}^T K^{-1}\mathbf y}
 $$
 
 and
 
 $$
-\boxed{\sigma_*^2=k_{**}-\mathbf k_*^T K^{-1}\mathbf k_*.}
+\boxed{\sigma_{\ast}^2=k_{\ast\ast}-\mathbf k_{\ast}^T K^{-1}\mathbf k_{\ast}.}
 $$
 
 For a general (nonzero) mean function $m(x)$, the mean becomes
 
 $$
-\boxed{\mu_*=m(x_*)+\mathbf k_*^TK^{-1}(\mathbf y-m(X)).}
+\boxed{\mu_{\ast}=m(x_{\ast})+\mathbf k_{\ast}^TK^{-1}(\mathbf y-m(X)).}
 $$
 
 #### Understanding the mean equation in plain words
@@ -459,14 +413,14 @@ $$
 
 - $\mathbf y-m(X)$: how much the observed outputs differ from prior expectations.
 - $K^{-1}$: accounts for correlations among the observations (so their contributions are combined appropriately).
-- $\mathbf k_*^T$: connects the query point to those observations.
+- $\mathbf k_{\ast}^T$: connects the query point to those observations.
 
 #### Understanding the variance equation in plain words
 
 $$
 \text{posterior variance}
-=\underbrace{k_{**}}_{\text{initial variance}}
--\underbrace{\mathbf k_*^TK^{-1}\mathbf k_*}_{\text{variance reduction from data}}.
+=\underbrace{k_{\ast\ast}}_{\text{initial variance}}
+-\underbrace{\mathbf k_{\ast}^TK^{-1}\mathbf k_{\ast}}_{\text{variance reduction from data}}.
 $$
 
 With a fixed kernel and fixed observation noise, **the query location and training input locations determine this variance**. The observed output magnitudes change the posterior mean, but not the posterior variance. If kernel hyperparameters are refitted after new observations, the story can be more complicated.
@@ -481,28 +435,28 @@ $$
 (x_1,y_1)=(0,2).
 $$
 
-We want to predict at $x_*=1$.
+We want to predict at $x_{\ast}=1$.
 
 - Training covariance: $K=[k(0,0)]=[1]$.
-- Cross-covariance: $k_*=k(0,1)=e^{-1/2}\approx0.6065$.
-- Query self-covariance: $k_{**}=k(1,1)=1$.
+- Cross-covariance: $k_{\ast}=k(0,1)=e^{-1/2}\approx0.6065$.
+- Query self-covariance: $k_{\ast\ast}=k(1,1)=1$.
 
 The noiseless GP equations give
 
 $$
-\mu_*=0.6065\times 2\approx\boxed{1.213}
+\mu_{\ast}=0.6065\times 2\approx\boxed{1.213}
 $$
 
 and
 
 $$
-\sigma_*^2=1-(0.6065)^2\approx\boxed{0.632},
-\qquad \sigma_*\approx0.795.
+\sigma_{\ast}^2=1-(0.6065)^2\approx\boxed{0.632},
+\qquad \sigma_{\ast}\approx0.795.
 $$
 
 **Interpretation:** The GP's **point estimate** at $x=1$ is 1.213, but it is uncertain. The *actual* unknown function value need not equal 1.213.
 
-If we query the observed input $x_*=0$ in this noiseless example, the predicted mean is 2 and the latent posterior variance is 0.
+If we query the observed input $x_{\ast}=0$ in this noiseless example, the predicted mean is 2 and the latent posterior variance is 0.
 
 ### 6.4 Variance versus standard deviation: which one is “uncertainty”?
 
@@ -513,11 +467,11 @@ The shaded width is based on **standard deviation** ($\mu\pm1.96\sigma$), not on
 
 Both describe uncertainty, but be precise:
 
-- The GP conditional covariance equation gives **variance** $\sigma_*^2$.
-- Taking its square root gives **standard deviation** $\sigma_*$.
-- A commonly shown 95% posterior interval for a Gaussian latent value is $\mu_*\pm1.96\sigma_*$, **not** $\mu_*\pm1.96\sigma_*^2$.
+- The GP conditional covariance equation gives **variance** $\sigma_{\ast}^2$.
+- Taking its square root gives **standard deviation** $\sigma_{\ast}$.
+- A commonly shown 95% posterior interval for a Gaussian latent value is $\mu_{\ast}\pm1.96\sigma_{\ast}$, **not** $\mu_{\ast}\pm1.96\sigma_{\ast}^2$.
 
-For example, if $f_*\mid D\sim\mathcal N(5,0.25)$, then the point estimate is 5, the variance is 0.25, and the standard deviation is 0.5. The approximate 95% interval is $5\pm0.98=[4.02,5.98]$.
+For example, if $f_{\ast}\mid D\sim\mathcal N(5,0.25)$, then the point estimate is 5, the variance is 0.25, and the standard deviation is 0.5. The approximate 95% interval is $5\pm0.98=[4.02,5.98]$.
 
 ### 6.5 Noisy observations: the newer lecture slide
 
@@ -530,19 +484,19 @@ $$
 then we replace $K$ with $K+\sigma_n^2 I$ *when conditioning on the observations*:
 
 $$
-\boxed{\mu_*(x)=m(x)+\mathbf k_*^T(K+\sigma_n^2I)^{-1}(\mathbf y-m(X))}
+\boxed{\mu_{\ast}(x)=m(x)+\mathbf k_{\ast}^T(K+\sigma_n^2I)^{-1}(\mathbf y-m(X))}
 $$
 
 $$
-\boxed{\sigma_{f,*}^2(x)=k(x,x)-\mathbf k_*^T(K+\sigma_n^2I)^{-1}\mathbf k_*}.
+\boxed{\sigma_{f,\ast}^2(x)=k(x,x)-\mathbf k_{\ast}^T(K+\sigma_n^2I)^{-1}\mathbf k_{\ast}}.
 $$
 
 That variance describes the **latent function** $f(x)$.
 
-For a **new noisy measured output** $y_*$, the variance adds measurement noise:
+For a **new noisy measured output** $y_{\ast}$, the variance adds measurement noise:
 
 $$
-\boxed{\operatorname{Var}(y_*\mid D)=\sigma_{f,*}^2+\sigma_n^2.}
+\boxed{\mathrm{Var}(y_{\ast}\mid D)=\sigma_{f,\ast}^2+\sigma_n^2.}
 $$
 
 This is why one slide shows a predictive variance of $\sigma_t^2(x)+\sigma_{\text{noise}}^2$.
@@ -574,17 +528,17 @@ $$
 
 For *noiseless* observations, the posterior samples pass (up to numerical precision) through the observed points. These ten are visual illustrations only; **we do not choose one** as the answer.
 
-#### C. A new input $x_*$ arrives: take a VERTICAL SLICE
+#### C. A new input $x_{\ast}$ arrives: take a VERTICAL SLICE
 
 ![A query location x star is marked by a vertical line crossing ten posterior function samples; dark diamond indicates posterior mean](GP_BO_illustrated_assets/06_posterior_query_slice.png)
 
-Imagine drawing a vertical line at $x_*$. Where it crosses each sampled function, you get **a possible output at the same input**. Ten curves give ten example output values:
+Imagine drawing a vertical line at $x_{\ast}$. Where it crosses each sampled function, you get **a possible output at the same input**. Ten curves give ten example output values:
 
 $$
-f^{(1)}(x_*),\ f^{(2)}(x_*),\ \ldots,\ f^{(10)}(x_*).
+f^{(1)}(x_{\ast}),\ f^{(2)}(x_{\ast}),\ \ldots,\ f^{(10)}(x_{\ast}).
 $$
 
-Crucially, all those values are for the **same** $x_*$. The outputs differ because the GP posterior describes uncertainty about the unknown function, not because $x_*$ is changing.
+Crucially, all those values are for the **same** $x_{\ast}$. The outputs differ because the GP posterior describes uncertainty about the unknown function, not because $x_{\ast}$ is changing.
 
 #### D. Those possible heights form a GAUSSIAN distribution
 
@@ -593,16 +547,16 @@ Crucially, all those values are for the **same** $x_*$. The outputs differ becau
 For one query location, the posterior implies
 
 $$
-\boxed{f(x_*)\mid D\sim\mathcal N(\mu_*,\sigma_*^2)}.
+\boxed{f(x_{\ast})\mid D\sim\mathcal N(\mu_{\ast},\sigma_{\ast}^2)}.
 $$
 
 Here are the three quantities you asked to connect:
 
-1. **Mean $\mu_*$:** the center / expectation of the distribution of all possible posterior outputs at $x_*$. If you draw ten posterior functions and average their ten heights at $x_*$, you get a **rough estimate** of $\mu_*$. Averaging many more samples approaches the true posterior mean.
-2. **Variance $\sigma_*^2$:** how strongly possible values differ from $\mu_*$ **on average, using squared deviations**. It's *not* the difference between the maximum and minimum sample heights.
-3. **Standard deviation $\sigma_* = \sqrt{\sigma_*^2}$:** the spread measured in the same units as the function's output. Use $\mu_*\pm1.96\sigma_*$ to draw a pointwise approximate 95% posterior interval under Gaussian assumptions.
+1. **Mean $\mu_{\ast}$:** the center / expectation of the distribution of all possible posterior outputs at $x_{\ast}$. If you draw ten posterior functions and average their ten heights at $x_{\ast}$, you get a **rough estimate** of $\mu_{\ast}$. Averaging many more samples approaches the true posterior mean.
+2. **Variance $\sigma_{\ast}^2$:** how strongly possible values differ from $\mu_{\ast}$ **on average, using squared deviations**. It's *not* the difference between the maximum and minimum sample heights.
+3. **Standard deviation $\sigma_{\ast} = \sqrt{\sigma_{\ast}^2}$:** the spread measured in the same units as the function's output. Use $\mu_{\ast}\pm1.96\sigma_{\ast}$ to draw a pointwise approximate 95% posterior interval under Gaussian assumptions.
 
-**Example of five possible posterior function heights** at the same $x_*$ (purely illustrative):
+**Example of five possible posterior function heights** at the same $x_{\ast}$ (purely illustrative):
 
 $$
 4,\ 5,\ 5,\ 6,\ 5.
@@ -618,27 +572,27 @@ Their **range** is $6-4=2$. **Range $\ne$ variance.** These are just five illust
 
 #### E. How is the answer actually computed? No ten-curve sampling is needed!
 
-For a zero-mean GP and noiseless observations, the **exact** posterior quantities at $x_*$ are
+For a zero-mean GP and noiseless observations, the **exact** posterior quantities at $x_{\ast}$ are
 
 $$
-\boxed{\mu_*=\mathbf k_*^T K^{-1}\mathbf y},
+\boxed{\mu_{\ast}=\mathbf k_{\ast}^T K^{-1}\mathbf y},
 \qquad
-\boxed{\sigma_*^2=k(x_*,x_*)-\mathbf k_*^T K^{-1}\mathbf k_*}.
+\boxed{\sigma_{\ast}^2=k(x_{\ast},x_{\ast})-\mathbf k_{\ast}^T K^{-1}\mathbf k_{\ast}}.
 $$
 
 These formulas give the same mean and variance that the posterior function distribution describes; **they calculate them directly**, without drawing ten functions.
 
-- **Point prediction:** $\hat f(x_*)=\mu_*$.
-- **Uncertainty:** $\sigma_*^2$ (variance) or $\sigma_*$ (standard deviation).
-- **Unknown actual value:** $f(x_*)$; it is **not guaranteed** to equal $\mu_*$.
+- **Point prediction:** $\hat f(x_{\ast})=\mu_{\ast}$.
+- **Uncertainty:** $\sigma_{\ast}^2$ (variance) or $\sigma_{\ast}$ (standard deviation).
+- **Unknown actual value:** $f(x_{\ast})$; it is **not guaranteed** to equal $\mu_{\ast}$.
 
-If you evaluate $\mu_*(x)$ at many inputs, all those point predictions trace a **single posterior mean curve**. That mean curve is not a randomly selected prior sample or posterior sample.
+If you evaluate $\mu_{\ast}(x)$ at many inputs, all those point predictions trace a **single posterior mean curve**. That mean curve is not a randomly selected prior sample or posterior sample.
 
-> **Memory hook:** Prior = possible curves before data. Posterior = possible curves after data. Query $x_*$ = look at a vertical slice through those possibilities. Mean = central height; variance = spread of heights around that center. The final prediction uses the **analytic posterior mean**, not the tallest/lowest/sample curve.
+> **Memory hook:** Prior = possible curves before data. Posterior = possible curves after data. Query $x_{\ast}$ = look at a vertical slice through those possibilities. Mean = central height; variance = spread of heights around that center. The final prediction uses the **analytic posterior mean**, not the tallest/lowest/sample curve.
 
 #### F. What changes when noise is present?
 
-With **noisy** observations, posterior sample curves need not pass exactly through measured dots. The formulas use $K+\sigma_n^2 I$ for conditioning. The latent-function prediction has variance $\sigma_{f,*}^2$; predicting a *new noisy measurement* additionally includes observation noise $\sigma_n^2$.
+With **noisy** observations, posterior sample curves need not pass exactly through measured dots. The formulas use $K+\sigma_n^2 I$ for conditioning. The latent-function prediction has variance $\sigma_{f,\ast}^2$; predicting a *new noisy measurement* additionally includes observation noise $\sigma_n^2$.
 
 ## 7. What, if anything, is learned in a GP?
 
