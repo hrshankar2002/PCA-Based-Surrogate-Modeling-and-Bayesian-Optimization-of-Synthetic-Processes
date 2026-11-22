@@ -1,7 +1,7 @@
 # Gaussian Processes and Bayesian Optimization
 ## Illustrated, from-scratch refresher: Gaussian distributions → GP priors → regression → acquisition functions → Probability of Improvement
 
-> **Illustrated edition:** Figures are stored in the adjacent `GP_BO_illustrated_assets/` folder. Keep the Markdown file and this folder together, or use the ZIP package.
+> **Illustrated edition:** Figures are stored in the adjacent `GP_BO_illustrated_assets/` folder. Keep the Markdown file and this folder together.
 >
 > **Purpose:** Read this document on its own to rebuild the concepts discussed in the lecture slides, including the specific points that were confusing. It starts with basic probability and moves gradually to the maximization of Probability of Improvement (PI).
 >
@@ -16,7 +16,7 @@
 - **If you understand GP regression but not BO:** Start at Section 8.
 - **If you forget how samples become predictions:** Jump to the **illustrated Section 6.6** (prior → posterior → sampled functions → query $x_*$ → mean/variance).
 - **If you only need to revisit the latest question:** Read Sections 9–11, especially *why maximizing a monotonic CDF is equivalent to maximizing its input*.
-- **Before a quiz or interview:** Read the one-page summary (Section 13), then test yourself (Section 14).
+- **Before a quiz or interview:** Read the complete BO iteration (Section 12), then test yourself against the three traps (Section 11.6).
 
 ### The complete storyline
 
@@ -85,7 +85,7 @@ $$
 - **CDF (S-shaped increasing curve):** tells us the probability of being at or below $x$.
 
 $$
-F(x)=P(X\le x)=\int_{-\infty}^{x}p(t)\,dt.
+F(x)=P(X\le x)=\int_{-\infty}^{x}p(t)\thinspace dt.
 $$
 
 For a standard normal $Z\sim\mathcal N(0,1)$, the CDF is called $\Phi(z)$.
@@ -387,7 +387,7 @@ Draw a fresh $\mathbf z$ and repeat: you get another curve. Repeat 10 times: you
 Imagine we already evaluated an unknown function at three locations:
 
 $$
-D=\{(x_1,y_1),(x_2,y_2),(x_3,y_3)\}.
+D=\lbrace(x_1,y_1),(x_2,y_2),(x_3,y_3)\rbrace.
 $$
 
 We now want $f(x_*)$ at a new input $x_*$.
@@ -559,7 +559,7 @@ A GP **prior** defines a distribution over *possible functions*. The ten lines a
 
 #### B. Add observations and obtain the GP POSTERIOR
 
-We observe some input/output pairs $D=\{(x_i,y_i)\}$. Conditioning the prior on them produces a **posterior distribution over functions**:
+We observe some input/output pairs $D=\lbrace(x_i,y_i)\rbrace$. Conditioning the prior on them produces a **posterior distribution over functions**:
 
 $$
 f\mid D \sim GP(m_{\mathrm{post}}, k_{\mathrm{post}}).
@@ -684,11 +684,11 @@ But you **do not know the true function everywhere**. You can only discover $f(x
 The dashed objective is only visible to us in this teaching plot; the optimizer **cannot** inspect that full curve.
 
 
-- **Dashed black curve:** the *true objective*, drawn so students can see what really happens. **The optimizer does not know it.**
+- **Dashed curve:** the *true objective*, drawn so students can see what really happens. **The optimizer does not know it.**
 - **Observed dots:** inputs already evaluated and their measured outputs.
-- **Solid black curve:** GP posterior mean, our current estimate.
+- **Solid curve:** GP posterior mean, our current estimate.
 - **Shaded band:** GP posterior uncertainty (often mean $\pm$ standard deviation).
-- **Green acquisition curve:** a score for how useful each possible next evaluation would be.
+- **Acquisition curve** (the green curve in the next figure): a score for how useful each possible next evaluation would be.
 
 **This is not generally inverse prediction** (“here is the target output; find the input”). Standard BO tries to discover **which input achieves the largest unknown output**, often without knowing the maximum output value in advance.
 
@@ -701,7 +701,7 @@ f(x)\mid D_t\sim\mathcal N\big(\mu_t(x),\sigma_t^2(x)\big).
 $$
 
 - **Exploitation:** Test where the GP's predicted mean $\mu_t(x)$ is high; this looks promising now.
-- **Exploration:** Test where the GP is uncertain $\sigma_t(x)$ is high; it might reveal an unexpectedly good value.
+- **Exploration:** Test where the GP is uncertain ($\sigma_t(x)$ is high); it might reveal an unexpectedly good value.
 
 Both matter because the highest *predicted* value may not be the true optimum.
 
@@ -783,7 +783,7 @@ Now we must decide which setting to test next. **PI asks:**
 The lecture denotes the best observed value by $\mu^+$ (some books use $f_{\mathrm{best}}$ or $y^+$). In this guide, write
 
 $$
-b=\mu^+=\max\{y_1,\ldots,y_t\}
+b=\mu^+=\max\lbrace y_1,\ldots,y_t\rbrace
 $$
 
 for the usual noiseless case.
@@ -950,7 +950,7 @@ $$
 For a Gaussian predictive distribution and $\sigma>0$,
 
 $$
-EI(x)=(\mu-T)\Phi(z)+\sigma\,\phi(z),\qquad z=\frac{\mu-T}{\sigma},
+EI(x)=(\mu-T)\Phi(z)+\sigma\thinspace\phi(z),\qquad z=\frac{\mu-T}{\sigma},
 $$
 
 where $\phi$ is the standard normal **PDF**, while $\Phi$ is the **CDF**.
@@ -1108,7 +1108,7 @@ For a function that is merely *nondecreasing* with flat regions, ties can be int
 
 Assume you are maximizing product quality using temperature $x$.
 
-1. **Start with real observed data:** $D_t=\{(x_i,y_i)\}_{i=1}^t$.
+1. **Start with real observed data:** $D_t=\lbrace(x_i,y_i)\rbrace_{i=1}^t$.
 2. **Choose a GP mean/kernel** and optionally fit length scale, signal variance, and noise parameters.
 3. **Condition the GP on data:** use covariance matrices to obtain its posterior.
 4. **Consider any candidate temperature $x$:** evaluate the GP's $\mu_t(x)$ and $\sigma_t(x)$.
