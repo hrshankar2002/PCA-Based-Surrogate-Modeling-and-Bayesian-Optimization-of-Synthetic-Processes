@@ -19,12 +19,12 @@ Every number and figure below is a measured result from these notebooks, and `ma
 
 | Name | What it does |
 | --- | --- |
-| PCA+GP | 5 PCA scores, one Gaussian process per score |
+| PCA+GP (synthetic study) | 5 PCA scores, one Gaussian process per score |
 | PCA+RF | 5 PCA scores, one random forest predicting all of them |
 | PCA+MLP | 5 PCA scores, one small neural network predicting all of them |
 | Direct GP / RF / MLP | The same predictors on every map value, with no PCA. Direct GP uses one kernel for all outputs |
 | PCA+RF (std. scores) | PCA+RF with each score rescaled to equal size |
-| PCA+shared GP (BOSCH only) | 10 PCA scores, **one** GP with one kernel for all scores |
+| PCA+shared GP (BOSCH study, in place of PCA+GP) | 10 PCA scores, **one** GP with one kernel for all scores. One GP per score overfit the few training lots |
 
 ---
 
@@ -190,11 +190,11 @@ Each query is encoded as (input setting, map location, output ID) and the model 
 
 Normalised RMSE, mean over five seeds:
 
-| Training wafers | PCA+GP | PCA+RF | PCA+MLP | Direct GP | Direct RF | Direct MLP | PCA+RF (std.) |
+| Training wafers | PCA+shared GP | PCA+RF | PCA+MLP | Direct GP | Direct RF | Direct MLP | PCA+RF (std.) |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 20 | 0.746 | 0.654 | 0.820 | 0.702 | 0.657 | 0.946 | **0.650** |
-| 40 | 0.762 | 0.649 | 0.846 | 0.650 | 0.652 | 1.009 | **0.639** |
-| 78 | 0.732 | 0.668 | 0.954 | **0.660** | 0.676 | 1.007 | 0.669 |
+| 20 | 0.721 | 0.654 | 0.820 | 0.702 | 0.657 | 0.946 | **0.650** |
+| 40 | 0.722 | 0.649 | 0.846 | 0.650 | 0.652 | 1.009 | **0.639** |
+| 78 | 0.731 | 0.668 | 0.954 | **0.660** | 0.676 | 1.007 | 0.669 |
 
 At 78 wafers, the best oxide error is 0.072 µm (Direct GP) and the best Si error is 0.373 µm (PCA+RF std.).
 
@@ -202,38 +202,39 @@ At 78 wafers, the best oxide error is 0.072 µm (Direct GP) and the best Si erro
 
 **What it shows:** error on the held-out lot (µm, log scale) against training wafers, for oxide (left) and Si (right).
 
-- **Line styles:** as in the synthetic figure; the dotted line is the PCA limit.
-- **What to look for:** the lines are nearly flat, so more wafers barely help. For oxide, every model sits far above the PCA limit; for Si, the best models are close to it.
+- **Line styles:** as in the synthetic figure.
+- **Dotted lines:** the PCA limits. Black is for 5 scores (used by PCA+RF and PCA+MLP); grey is for 10 scores (used by PCA+shared GP).
+- **What to look for:** the lines are nearly flat, so more wafers barely help. For oxide, every model sits far above both PCA limits; for Si, the best models are close to the 5-score limit.
 
 ![BOSCH example maps](results/bosch/example_maps.png)
 
-**What it shows:** measured map, PCA+GP prediction and error on the wafer plane, for the first wafer of lot 8 (typical) and of lot 1 (hard). Each was predicted with its lot held out (78 training wafers, seed 10).
+**What it shows:** measured map, PCA+shared GP prediction and error on the wafer plane, for the first wafer of lot 8 (typical) and of lot 1 (hard). Each was predicted with its lot held out (78 training wafers, seed 10).
 
-- **Lot 8:** oxide is predicted well (RMSE 0.026 µm), and Si is about 0.29 µm too high across the whole wafer.
-- **Lot 1:** the model expects the usual oxide edge and overpredicts the edge ring by up to about 0.2 µm (oxide RMSE 0.128 µm). This lot etched much less oxide at the edge.
+- **Lot 8:** oxide is predicted well (RMSE 0.024 µm), and Si is about 0.26 µm too high across the whole wafer.
+- **Lot 1:** the model expects the usual oxide edge and overpredicts the edge ring (oxide RMSE 0.128 µm). This lot etched much less oxide at the edge.
 
 ![BOSCH PCA and GP uncertainty](results/bosch/pca_and_uncertainty.png)
 
 **What it shows:**
 
-- **Left:** the share of map variation kept by the first 1–5 PCA scores for one fold (lot 1 held out), about 93% with 5 scores. Over all folds the range is 94–96%.
-- **Right:** how often the GP's 95% ranges contain the held-out lots' scores, only 78–82%, far below the intended 95%.
+- **Left:** the share of map variation kept by the first 1–10 PCA scores for one fold (lot 1 held out): about 93% with 5 scores and 97% with 10. Over all folds the ranges are 94–96% (5 scores) and 97.7–99.5% (10 scores).
+- **Right:** how often PCA+shared GP's 95% ranges contain the held-out lots' scores: 91–92%, a little below the intended 95%.
 
 **Findings**
 
-- **PCA+GP is not the best model here.** It loses to Direct GP in every seed at every size, with 6–17% higher error. Its five separate GPs fit the nine training lots too closely; Direct GP's single kernel generalises better.
+- **With only the 6 inputs, PCA+shared GP is not the best model.** It has 3–11% higher error than Direct GP and is better in only 1 of 15 seed comparisons (1/5 at 20 wafers, 0/5 at 40 and 78). The 6 inputs carry too little information for the PCA step to help the GP.
 - **More training wafers barely help.** Going from 20 to 78 wafers changes the error little for every model. The difficulty is that each new lot behaves differently, not a shortage of wafers.
 - **The effect of PCA depends on the model:**
   - Random Forest: PCA+RF beats Direct RF in all 5 seeds, but by less than 1.2%.
   - MLP: PCA cuts the error by 5–16%.
-  - GP: PCA hurts (see above).
+  - GP: PCA+shared GP is 3–11% worse than Direct GP (see above).
 - **Si is fairly predictable; oxide is not.**
-  - **Si:** errors of 0.37–0.46 µm (all models except Direct MLP) sit close to the PCA limit of 0.355 µm (the error left even if the 5 scores were predicted perfectly). Later wafers in a lot etch less, and the models learn this from position.
-  - **Oxide:** the best error, 0.072 µm, is about three times its PCA limit of 0.022 µm. Some lots, mainly lots 1 and 2, etch much less oxide at the wafer edge, and none of the 6 inputs explains why.
-- **Five PCA scores keep 94–96% of the map variation,** so compression is not the main problem.
-- **The GP is overconfident on new lots.** Its 95% ranges contain the true score only 78–82% of the time.
+  - **Si:** errors of 0.37–0.46 µm (all models except Direct MLP) sit close to the 5-score PCA limit of 0.355 µm, the error left even if the scores were predicted perfectly (0.283 µm with 10 scores). Later wafers in a lot etch less, and the models learn this from position.
+  - **Oxide:** the best error, 0.072 µm, is about three times the 5-score PCA limit of 0.022 µm (0.017 µm with 10 scores). Some lots, mainly lots 1 and 2, etch much less oxide at the wafer edge, and none of the 6 inputs explains why.
+- **PCA compression is not the main problem.** Five scores keep 94–96% of the map variation, and ten keep 97.7–99.5%.
+- **The GP is slightly overconfident on new lots.** PCA+shared GP's 95% ranges contain the true score 91–92% of the time.
 - **A new lot is much harder than a known one.** If test wafers are drawn at random from all lots, errors fall to 0.30–0.40 (against 0.66–1.01 by lot): new lots are 67–210% harder.
-- **A shared conditioning label can mislead.** For the GP and Random Forest models, lots whose label also appears in another lot are *harder* (0.79–0.91 at 78 wafers) than lots with a unique label (0.51–0.56). Lots 1 and 9 are both "3C" but etched very different amounts of oxide.
+- **A shared conditioning label can mislead.** For the GP and Random Forest models, lots whose label also appears in another lot are *harder* (0.79–0.93 at 78 wafers) than lots with a unique label (0.51–0.54). Lots 1 and 9 are both "3C" but etched very different amounts of oxide.
 
 ### Extra inputs: machine readings and plasma light
 
@@ -250,20 +251,19 @@ Both summaries are recorded while the wafer is etched. A model that uses them th
 
 **What it shows:** the fluorine 686 nm line height during the etch steps against the wafer's mean oxide etch. Small dots are wafers; large dots are lot averages, numbered by lot. Lots 1 and 2, the two low-oxide lots (about 0.58 µm), have the brightest fluorine light, while the other lots sit around 0.66–0.69 µm.
 
-The comparison adds one model, **PCA+shared GP**. Before standardising, inputs are clipped to their training range in all three sets, which is why the 6-input numbers here differ slightly from the table above.
+The same seven models are compared. Before standardising, inputs are clipped to their training range in all three sets, which is why the 6-input numbers here differ slightly from the table above.
 
 Normalised RMSE at 78 training wafers, mean over five seeds:
 
 | Model | 6 inputs | + 53 machine readings | + 5 emission lines |
 | --- | --- | --- | --- |
-| PCA+GP | 0.745 | 0.821 | 0.687 |
+| **PCA+shared GP** | 0.743 | 0.707 | **0.486** |
 | PCA+RF | 0.668 | 0.791 | 0.645 |
 | PCA+MLP | 0.954 | 0.676 | 0.699 |
 | Direct GP | 0.660 | 0.595 | 0.542 |
 | Direct RF | 0.676 | 0.788 | 0.644 |
 | Direct MLP | 1.012 | 0.743 | 0.746 |
 | PCA+RF (std.) | 0.669 | 0.773 | 0.633 |
-| **PCA+shared GP** | 0.743 | 0.707 | **0.486** |
 
 The same comparison per channel, at 78 training wafers:
 
@@ -274,17 +274,17 @@ The same comparison per channel, at 78 training wafers:
 
 ![Extra inputs: learning curves](results/bosch/extra_inputs_curves.png)
 
-**What it shows:** error on the held-out lot against training wafers for all eight models with the 5 emission lines added, for both channels together, oxide and Si.
+**What it shows:** error on the held-out lot against training wafers for all seven models with the 5 emission lines added, for both channels together, oxide and Si.
 
 - **The black dotted line** is Direct GP with only the 6 inputs, for reference.
-- **What to look for:** PCA+shared GP (thick line) keeps improving with more wafers and ends lowest. Separate-GP PCA+GP gets slightly worse.
+- **What to look for:** PCA+shared GP (thick line) keeps improving with more wafers and ends lowest.
 
 ![Error maps of every model, with the emission lines](results/bosch/extra_inputs_example_maps.png)
 
-**What it shows:** the same two wafers as the main-run example maps, now for all eight models with the emission lines (78 training wafers, seed 10).
+**What it shows:** the same two wafers as the main-run example maps, now for all seven models with the emission lines (78 training wafers, seed 10).
 
 - **First column:** the measured map. **Other columns:** prediction minus measurement (red = too high, blue = too low).
-- **Lot 1 oxide:** most models still overpredict the edge ring, but PCA+shared GP's ring is faint (RMSE 0.067 µm against 0.126–0.140 for separate-GP PCA+GP and the Random Forests).
+- **Lot 1 oxide:** most models still overpredict the edge ring, but PCA+shared GP's ring is faint (RMSE 0.067 µm against 0.126–0.140 for the Random Forests).
 - **Lot 8 Si:** most models are uniformly a little too high.
 - **Single wafers vary:** these are two wafers only, and the ranking of models changes from wafer to wafer.
 
@@ -292,9 +292,9 @@ The same comparison per channel, at 78 training wafers:
 
 - **The plasma light is the first input that explains oxide.** With the 5 emission lines, Direct GP improves by 18% (0.660 → 0.542, better in 5 of 5 seeds) and its oxide error falls from 0.072 to 0.059 µm.
 - **Why it works:** the fluorine line is brightest in lots 1 and 2, the two low-oxide lots, at 1,022 and 1,003 counts against 890–985 for the others. The light measures the chamber's actual state, which the conditioning label only approximates. It also tells lot 1 from lot 9 despite their identical label.
-- **With the emission lines, one shared GP fixes PCA+GP.** PCA+shared GP reaches **0.486**, the lowest error of any model and input set, with an oxide error of 0.053 µm. Against separate-GP PCA+GP it is 29% better (5 of 5 seeds). Against Direct GP it is 10% better at 78 wafers (5 of 5 seeds), but about level at 40 (3 of 5) and worse at 20 (1 of 5).
+- **With the emission lines, PCA+shared GP is the best model.** It reaches **0.486**, the lowest error of any model and input set, with an oxide error of 0.053 µm. It also gains the most from the emission lines: 35% lower error than with the 6 inputs (5 of 5 seeds). Against Direct GP it is 10% better at 78 wafers (5 of 5 seeds), but about level at 40 (3 of 5) and worse at 20 (1 of 5).
 - **The largest gains are on the hardest lots.** For PCA+shared GP, adding the emission lines lowers lot 1's oxide error from 0.136 µm to 0.056 µm, and lot 9's from 0.126 to 0.074.
-- **The 53 machine readings mainly help Si,** giving the lowest Si error (0.298 µm, Direct GP). They hurt the models that cannot ignore unhelpful inputs: the Random Forests get 15–18% worse, and separate-GP PCA+GP 10% worse.
+- **The 53 machine readings mainly help Si,** giving the lowest Si error (0.298 µm, Direct GP). They hurt the Random Forests, which cannot ignore unhelpful inputs: they get 15–18% worse.
 - **Cautions:**
   - **Weak seed evidence at 78 wafers.** The five seeds use almost the same wafers there: for 6 of the 10 lots the training pool is exactly 78 wafers, so those folds are identical in every seed. Agreement across seeds at that size is weak evidence.
   - **Settings chosen on the same lots.** The PCA+shared GP settings (10 scores, large scores weighted more) were chosen after trying six versions on these same lots.
