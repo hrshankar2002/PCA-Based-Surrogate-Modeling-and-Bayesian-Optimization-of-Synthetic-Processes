@@ -1,1432 +1,306 @@
 # PCA-Based Surrogate Modeling and Bayesian Optimization of Synthetic Processes
 
-Idea: **We choose some input settings, and a process produces output values.** We want to learn that relationship, use it to choose better inputs, and see whether one model can serve two processes.
+A process turns input settings into **output maps**: many values measured across a wafer. This study compresses each map into a few **PCA scores** and predicts the scores from the inputs (a *surrogate model*). It asks three questions:
 
-This guide starts from that idea and builds up the experiments one at a time. The [notebook](Process_Study_Code_Only.ipynb) contains the code and its executed outputs. This README explains what those calculations mean.
+- **Experiment 1:** which surrogate predicts maps best?
+- **Experiment 2:** can the surrogate find better input settings?
+- **Experiment 3:** can one model serve two processes?
 
-> **Two kinds of numbers appear below.** “Teaching example” means small invented numbers used to explain a calculation. “Measured result” means a value from the executed study. They are never mixed in the result tables.
+The questions are answered on two synthetic processes and then on real plasma-etch wafers.
 
-The route through the study is:
-
-**Look at the data → learn to predict maps → check uncertainty → choose better input settings with BO → try sharing a model.**
-
-Process **A** and Process **B** are two datasets. Experiment **1**, **2**, and **3** are three questions we ask about them. These are different kinds of labels.
-
-
-## 1. Follow one input setting through the synthetic process
-
-### Start with three input values
-
-For Process A, consider this input setting:
-
-`x1 = 0.2, x2 = 0.6, x3 = 0.8`
-
-An **input setting** is one combination of input values.
-
-Here we consider the process to be multi channel, each with a respective map (grid of values: the row and column format). A **channel** is one type of output with its own map. For example, channel 1 and channel 3 are two different outputs at the same location. Their numerical values need not be similar.
-
-
-| Process | Inputs in one input setting | Maps produced | Size of each map | Numbers produced per input setting |
-| --- | --- | --- | --- | --- |
-| A | 3 | 5 channels | 10 × 10 | 500 |
-| B | 4 | 10 channels | 10 × 10 | 1,000 |
-
-
-Five hundred outputs do **not** mean five hundred independent experiments. We chose one input setting, so we have one example with a large output.
-
-### Where the outputs come from
-
-As data source for this synthetic study, we use a pre-designed function to creates the maps. We create each output map by **adding together five simple patterns**. Imagine stacking five transparent sheets, each with a different picture.
-
-| Pattern | What it looks like |
-| --- | --- |
-| Flat level | The same value everywhere |
-| Bowl | Values change from the centre toward the edges |
-| Wave | Alternating high and low bands |
-| Bump | One small area with higher values |
-| Diagonal pattern | Values change along a diagonal |
-
-The **input setting** is simply the list of input numbers, such as `[0.2, 0.6, 0.8]`. The synthetic function converts those numbers into amounts of each pattern.
-
-```text
-Output map = starting level
-           + 0.4 × flat pattern
-           + 0.2 × bowl pattern
-           − 0.3 × wave pattern
-           + 0.8 × bump pattern
-           + 0.1 × diagonal pattern
-```
-
-Actual synthetic generator used :
-$$
-Y_{r,s,k}(X) = b_k + \sum_{j=1}^{5} c_j(X)\,W_{j,k}\,B_j(r,s)
-$$
-
-**Where:**
-
-- $X$: Input recipe (3 variables for Process A, 4 for Process B).
-- $Y_{r,s,k}(X)$: Generated output at grid location $(r,s)$ for channel $k$.
-- $b_k$: Fixed starting level (offset) for output channel $k$.
-- $c_j(X)$: Recipe-dependent coefficient for spatial pattern $j$.
-- $W_{j,k}$: Fixed weight connecting spatial pattern $j$ to output channel $k$.
-- $B_j(r,s)$: Value of spatial pattern $j$ at grid location $(r,s)$.
-- $j$: Spatial pattern index ($1$ to $5$).
-- $k$: Output channel index ($1$ to $5$ for Process A, $1$ to $10$ for Process B).
-- $(r,s)$: Row and column coordinates of the $10 \times 10$ spatial grid.
-
-At **every location in the map**, we multiply that location’s value in each pattern by its amount, then add the five contributions and the starting level. That gives the output value at that location. A different input setting changes these amounts, so the resulting map changes.
-
-**Each channel is a different output measurement.** For the same input setting, channel A1 might show a strong bump, while channel A2 shows a stronger wave. Each channel has fixed weights controlling how the input setting changes its pattern amounts, and a starting level that shifts the values of its map up or down. We built the synthetic function this way so the maps have a simple underlying structure. That gives PCA recurring structure to discover when it compresses the outputs later.
-
-### Calculate one value in channel A3
-
-At one location in one channel, the calculation is:
-
-`output = contribution 1 + contribution 2 + contribution 3 + contribution 4 + contribution 5 + offset`
-
-**Calculated from the actual generator:** for our input setting `[0.2, 0.6, 0.8]`, channel A-3 at row 6, column 7 has these contributions. Rows and columns are counted from zero.
-
-
-| Term | Contribution, rounded |
-| --- | --- |
-| Flat pattern | −0.630132 |
-| Bowl pattern | +0.000937 |
-| Wave pattern | +0.163366 |
-| Bump pattern | −0.023188 |
-| Diagonal pattern | +0.009956 |
-| Channel offset | +0.388890 |
-| Total output | −0.090171 |
-
-
-The total **−0.090171 is the true synthetic value at one specific location in channel A3**, for the input setting `[0.2, 0.6, 0.8]`. The table shows how our synthetic function calculates that one value.  Channel A3 has a **10 × 10 map**, so it contains **100 values**. This table calculates just one of those 100 values: row 6, column 7, using zero-based indices.
-
-The generator’s weights stay fixed throughout the study. Changing input settings or random sampling seeds does not redefine the underlying process.
-
-### Look at whole maps
-
-The next pictures use a different, simple reference input setting: every input is set to 0.5. They show all output channels before adding noise or fitting a model.
-
-
-![Clean outputs of Process A](results/function_maps_A.png)
-
-**Read this picture:** Each panel is one of A’s five channels. A color gives the value at that location. Bright does not automatically mean good; we have not defined an optimization objective yet.
-
-
-![Clean outputs of Process B](results/function_maps_B.png)
-
-**Read this picture:** B produces ten channels. Each panel has its own color scale, so equal colors across channels can represent different numbers.
-
-
-### Add imperfect observations
-
-For the prediction experiment, we add independent normal noise with standard deviation **0.035** to the clean map values. A model trains on these noisy observations. Because we generated the data ourselves, we can still compare its predictions with the hidden clean answer.
-
-**Conclusion:** “One input setting goes into a fixed synthetic function and produces several maps. The dataset contains input setting/map pairs. The models learn from noisy versions of those pairs.”
-
-
-## 2. Training & Inference Insights
-
-### Why compress the output?
-
-Process A has 500 output numbers per input setting. Many of these values move together because the maps have repeated spatial structure. PCA looks for a small number of patterns that describe most of that variation. Instead of predicting all 500 numbers directly, we ask the model to predict five numbers. These are called **PCA scores**. A stored PCA decoder then expands the five numbers into the full maps.
-
-
-### How PCA Compresses and Reconstructs Output Maps ?
-
-Imagine each output map contains only **two values**. We observe three maps from three different input settings.
-
-| Training example | Original map |
-|---|---|
-| 1 | [1, 3] |
-| 2 | [2, 4] |
-| 3 | [3, 5] |
-
-Notice that the second value is always 2 greater than the first. Both values increase together, meaning their variation is redundant. Instead of storing two changing values, PCA can represent each map using **one number (PCA score)**.
-
-#### Step 1 — Calculate the Mean Map
-
-Calculate the average of each position across all three maps.
-
-$$
-\mu = \left[\frac{1+2+3}{3},\frac{3+4+5}{3}\right]
-$$
-
-$$
-\boxed{\mu=[2,4]}
-$$
-
-Subtract the mean from each original map.
-
-| Original map | Difference from mean |
-|---|---|
-| [1, 3] | [−1, −1] |
-| [2, 4] | [0, 0] |
-| [3, 5] | [1, 1] |
-
-
-
-#### Step 2 — Find the Principal Component Direction
-
-PCA identifies the direction along which the centered data varies the most. Here, both values increase together, so the direction is:
-
-$$
-[1,1]
-$$
-
-However, PCA requires a **unit direction**, meaning its length must equal 1.
-
-Calculate the length:
-
-$$
-\|[1,1]\|=\sqrt{1^2+1^2}=\sqrt{2}=1.4142
-$$
-
-Normalize the direction:
-
-$$
-v_1=\frac{[1,1]}{\sqrt{2}}
-$$
-
-$$
-\boxed{v_1=[0.7071,0.7071]}
-$$
-
-This is the first principal component direction.
-
-#### Step 3 — Compress Each Map into One PCA Score
-
-To calculate a PCA score, take the **dot product** between the centered map and the principal direction.
-
-$$
-z=(Y-\mu)\cdot v_1
-$$
-
-For the first map, `[1, 3]`:
-
-**1. Subtract the mean:**
-
-$$
-[1,3]-[2,4]=[-1,-1]
-$$
-
-**2. Calculate the dot product:**
-
-$$
-z=(-1)(0.7071)+(-1)(0.7071)
-$$
-
-$$
-\boxed{z=-1.4142}
-$$
-
-Similarly, for the third map, `[3, 5]`:
-
-$$
-z=(1)(0.7071)+(1)(0.7071)
-$$
-
-$$
-\boxed{z=1.4142}
-$$
-
-The resulting PCA scores are:
-
-| Original map | Difference from mean | PCA score |
-|---|---|---|
-| [1, 3] | [−1, −1] | −1.4142 |
-| [2, 4] | [0, 0] | 0 |
-| [3, 5] | [1, 1] | +1.4142 |
-
-**Result:** Each map has been compressed from **2 values into 1 PCA score**.
-
-#### Step 4 — Reconstruct the Original Map
-
-PCA reconstructs a map using:
-
-$$
-\boxed{\text{Map}=\text{Mean Map}+\text{Score}\times\text{Direction}}
-$$
-
-Consider the first map, whose PCA score is `−1.4142`.
-
-Substitute the values:
-
-$$
-Y=[2,4]+(-1.4142)[0.7071,0.7071]
-$$
-
-Multiply the score by the direction:
-
-$$
-(-1.4142)[0.7071,0.7071]\approx[-1,-1]
-$$
-
-Add the mean map:
-
-$$
-Y=[2,4]+[-1,-1]
-$$
-
-$$
-\boxed{Y=[1,3]}
-$$
-
-We successfully reconstructed the original map using just **one PCA score**.
-
-Similarly, for the third map:
-
-$$
-Y=[2,4]+(1.4142)[0.7071,0.7071]
-$$
-
-$$
-Y=[2,4]+[1,1]
-$$
-
-$$
-\boxed{Y=[3,5]}
-$$
-
-In this example, reconstruction is exact (apart from rounding) because all three maps vary along the same direction.
-
-#### Step 5 — Predict a New Map Using a PCA Score
-
-Now suppose a trained model predicts a PCA score of `0.7071` for a new input setting.
-
-We can reconstruct the corresponding map without directly predicting its two output values.
-
-$$
-Y=[2,4]+0.7071[0.7071,0.7071]
-$$
-
-$$
-Y\approx[2,4]+[0.5,0.5]
-$$
-
-$$
-\boxed{Y\approx[2.5,4.5]}
-$$
-
-The predicted score is hypothetical and is used only to demonstrate reconstruction.
-
-**In the actual project**, Gaussian Process models predict PCA scores from input recipes. The PCA inverse transformation then reconstructs the spatial output maps.
-
----
-
-### What if the PCA Direction Were [1, 2] ?
-
-Consider the same three training maps, but suppose we try a different direction:
-
-$$
-[1,2]
-$$
-
-This is an illustrative alternative direction, **not the direction PCA would select for these three maps**.
-
-#### Step 1 — Normalize the Direction
-
-Calculate its length:
-
-$$
-\sqrt{1^2+2^2}=\sqrt5=2.2361
-$$
-
-Divide each component by the length:
-
-$$
-v=\frac{[1,2]}{\sqrt5}
-$$
-
-$$
-\boxed{v=[0.4472,0.8944]}
-$$
-
-#### Step 2 — Calculate the PCA-like Projection Score
-
-Take the original map `[3, 5]`.
-
-Subtract the mean:
-
-$$
-[3,5]-[2,4]=[1,1]
-$$
-
-Project this centered map onto the new unit direction:
-
-$$
-z=[1,1]\cdot[0.4472,0.8944]
-$$
-
-$$
-z=(1)(0.4472)+(1)(0.8944)
-$$
-
-$$
-\boxed{z=1.3416}
-$$
-
-Notice that this score differs from the earlier score of `1.4142` because we are projecting onto a different direction.
-
-#### Step 3 — Reconstruct Using the New Direction
-
-Use the same reconstruction formula:
-
-$$
-\text{Map}=\text{Mean Map}+\text{Score}\times\text{Direction}
-$$
-
-Substitute:
-
-$$
-Y=[2,4]+1.3416[0.4472,0.8944]
-$$
-
-Multiply:
-
-$$
-1.3416[0.4472,0.8944]\approx[0.6,1.2]
-$$
-
-Add the mean:
-
-$$
-Y=[2,4]+[0.6,1.2]
-$$
-
-$$
-\boxed{Y\approx[2.6,5.2]}
-$$
-
-#### Step 4 — Compare the Reconstruction
-
-| | Map values |
-|---|---|
-| Original map | [3, 5] |
-| Reconstructed using [1, 1] direction | [3, 5] |
-| Reconstructed using [1, 2] direction | [2.6, 5.2] |
-
-The new direction produces reconstruction error:
-
-$$
-[3,5]-[2.6,5.2]=[0.4,-0.2]
-$$
-
-Its squared reconstruction error is:
-
-$$
-0.4^2+(-0.2)^2=\boxed{0.20}
-$$
-
-
----
-
-### Connection to the Actual Gaussian Process Project
-
-In Process A, each input recipe generates 5 spatial output maps, each containing 10 × 10 values.
-
-Therefore:
-
-$$
-5\times10\times10=500\text{ output values}
-$$
-
-The PCA-based surrogate pipeline is:
-
-```text
-    Input
-      ↓
-Synthetic function
-      ↓
-500 output values per recipe
-      ↓
-PCA compression
-      ↓
-5 PCA scores per input
-      ↓
-Train 5 Gaussian Process models
-      ↓
-New input recipe
-      ↓
-Predict 5 PCA scores
-      ↓
-PCA reconstruction
-      ↓
-500 predicted output values
-      ↓
-Reshape into five 10 × 10 maps
-```
-
-The underlying idea is the same as the two-value example:
-
-- **Compression:** Replace a high-dimensional output map with a small set of PCA scores.
-- **Prediction:** Train Gaussian Process models to predict those scores from input recipes.
-- **Reconstruction:** Combine the predicted scores with the learned PCA directions and mean to recover the output maps.
-
-**Important:** PCA does not select 5 of the original 500 output values. It learns 5 directions that summarize the variation across the full output vectors. Because only 5 components are retained, reconstructed maps may have some approximation error.
-
-### Why are there two things to learn ?
-
-We want to predict 500 output numbers from three inputs. We split this into two jobs:
-
-```text
-Job 1 — PCA:
-Find a shorter way to describe the 500 output numbers.
-
-Job 2 — GP, Random Forest, or MLP:
-Learn how the three input numbers determine that shorter description.
-```
-
-
-### Check how well PCA compresses the outputs
-
-This is a check of **PCA’s representation**. It asks how much training-output variation is retained by the selected components.
-
-![PCA compression on training outputs](results/pca_compression.png)
-
-**Read this picture:** Each curve uses seed 10 and 80 training input settings. Move right to keep more components. The height tells us how much of the training-output variation those components retain. A retained-variance percentage is not a prediction-accuracy percentage.
-
-#### 4. Next, train a model to predict those scores
-
-We pair each input setting with the five scores PCA calculated for its observed outputs:
-
-| Model input | Model target |
-| --- | --- |
-| Input setting 1: three input values | Input setting 1’s five PCA scores |
-| Input setting 2: three input values | Input setting 2’s five PCA scores |
-| … | … |
-| Input setting 20: three input values | Input setting 20’s five PCA scores |
-
-The predictor learns:
-
-```text
-3 input values → 5 PCA scores
-```
-
-We try three choices for this predictor:
-
-| Predictor | How it predicts the scores |
-| --- | --- |
-| GP | Uses relationships between input settings to predict each score, with an uncertainty estimate. Our implementation fits five separate GPs, one per score. |
-| Random Forest | Combines the predictions of many decision trees to return five scores. |
-| MLP | Learns weights in a neural network that returns five scores. |
-
-All three choices receive the same training input settings and the same PCA representation for a given comparison.
-
-#### 5. Inference ?
-
-```text
-New input setting: 3 inputs
-         ↓
-Trained GP, Random Forest, or MLP
-         ↓
-5 predicted PCA scores
-         ↓
-PCA reconstruction
-         ↓
-500 predicted output values
-         ↓
-Arrange into five 10 × 10 maps
-```
-
-PCA reconstruction uses the same idea as the tiny example:
-
-```text
-Reconstructed output in scaled units
-    = learned average output
-    + predicted score 1 × learned direction 1
-    + predicted score 2 × learned direction 2
-    + ...
-    + predicted score 5 × learned direction 5
-```
-
-We also rescales the numbers so the methods can work with values of comparable size. During training, it learns input scaling, channel scaling, PCA, and score scaling using the training examples only.
-
-For a new input setting, the exact order is:
-
-1. Apply the saved input scaling to its three numbers.
-2. Predict five scaled scores.
-3. Reverse score scaling to get scores in the units PCA uses.
-4. Reconstruct the 500 values with the saved PCA mean and directions.
-5. Reverse channel scaling and arrange the values into five maps.
-
-We reuse the learned settings. The new input setting’s true outputs are not used in these steps.
-
-#### The same flow for GP, Random Forest, and MLP
-
-Think of **PCA as a way to translate 500 map values into five scores**, and translate those scores back into maps. The predictor learns to estimate those five scores from an input setting.
-
-```text
-TRAINING — PROCESS A
-
-20 Input Recipes                     20 Observed Output Maps
-(3 variables each)                   (500 values per recipe)
-      │                                       │
-      │                                       ▼
-      │                              Fit PCA on Output Maps
-      │                                       │
-      │                              500 Values → 5 Scores
-      │                                       │
-      │                              20 × 5 PCA Score Matrix
-      │                                       │
-      └───────────────────┬───────────────────┘
-                          │
-                          ▼
-                Train 5 Gaussian Processes
-                (3 Inputs → 5 PCA Scores)
-                One GP per PCA Score
-                          │
-                          ▼
-                   Trained GP Models
-
-
-PREDICTION — PROCESS A
-
-                  New Input Recipe
-                    (3 Variables)
-                          │
-                          ▼
-                 5 Trained GP Models
-                          │
-                          ▼
-                 5 Predicted PCA Scores
-                          │
-                          ▼
-                 Inverse PCA Transform
-                          │
-                          ▼
-                500 Predicted Values
-                          │
-                          ▼
-                Reshape into 5 Maps
-                  (10 × 10 Each)
-```
-
-We save PCA, the predictor, and the scaling settings. At inference, the PCA steps stay the same for all three methods:
-
-```text
-New input setting → trained GP            → five predicted scores → saved PCA decoder → five maps
-New input setting → trained Random Forest → five predicted scores → saved PCA decoder → five maps
-New input setting → trained MLP           → five predicted scores → saved PCA decoder → five maps
-```
-
-The saved scaling steps are applied and reversed in each pipeline. The new input setting’s actual maps are not needed to produce a prediction.
-
-| Predictor | What it learns |
-| --- | --- |
-| GP | Relationships between input settings, using five separate GPs—one for each score |
-| Random Forest | Many decision trees whose predictions are averaged to produce five scores |
-| MLP | Neural-network weights that turn three inputs into five scores |
-
-
-#### 7. How this leads into Experiment 1
-
-We now have three complete prediction pipelines:
-
-```text
-Input setting → GP            → PCA scores → output maps
-Input setting → Random Forest → PCA scores → output maps
-Input setting → MLP           → PCA scores → output maps
-```
-
-Experiment 1 asks: **Which pipeline predicts unseen input settings most accurately, and how does that change as we provide more training input settings?**
-
-We train with 20, 40, 80, and 160 input settings, then compare the predicted maps with the true synthetic maps for separate test input settings. The test answers are used to measure error after prediction; they are never used to fit PCA or train the predictors.
-
-~~~text
-Training Input = 20: 20*3 Input matrix / 20*500 Output matrix / 20*5 PCA Scores
-~~~
-
-## 3. Experiment 1 — Best predictor surrogate selection
-
-### Set up a fair test
-
-The **test input settings are newly generated input settings**, separate from the input settings used for training. We use the **same fixed synthetic function** to calculate the correct outputs for both sets.
-
-For each process, we use five sampling seeds: **10, 20, 30, 40, 50**. Each seed generates a pool of 160 training input settings and 120 separate test input settings. A different seed changes the sampled input settings and noise; the underlying function stays fixed.
-
-#### A real example: Process A, seed 10, 20 training input settings
-
-Each input is randomly selected between 0 and 1. These are the actual 20 training input settings from that run, rounded to six decimals:
-
-| Training input setting | Input 1 | Input 2 | Input 3 |
-| --- | ---: | ---: | ---: |
-| 1 | 0.218533 | 0.260585 | 0.049452 |
-| 2 | 0.538599 | 0.542071 | 0.789054 |
-| 3 | 0.912337 | 0.372263 | 0.325775 |
-| 4 | 0.655661 | 0.896986 | 0.651696 |
-| 5 | 0.783387 | 0.874239 | 0.192224 |
-| 6 | 0.610154 | 0.945718 | 0.819394 |
-| 7 | 0.225289 | 0.545599 | 0.871749 |
-| 8 | 0.801430 | 0.033999 | 0.092811 |
-| 9 | 0.762075 | 0.768683 | 0.119208 |
-| 10 | 0.112717 | 0.488293 | 0.377578 |
-| 11 | 0.048446 | 0.557338 | 0.822935 |
-| 12 | 0.096000 | 0.435693 | 0.278856 |
-| 13 | 0.411281 | 0.176976 | 0.360102 |
-| 14 | 0.147541 | 0.704831 | 0.632347 |
-| 15 | 0.374185 | 0.429076 | 0.048139 |
-| 16 | 0.404000 | 0.836557 | 0.450986 |
-| 17 | 0.846887 | 0.687955 | 0.068568 |
-| 18 | 0.576623 | 0.044302 | 0.170124 |
-| 19 | 0.042466 | 0.642395 | 0.511390 |
-| 20 | 0.989659 | 0.984226 | 0.027737 |
-
-For every row, we run the synthetic function:
-
-```text
-Training input setting 1
-[0.218533, 0.260585, 0.049452]
-                  ↓
-         Synthetic function
-                  ↓
-      500 clean output values
-                  ↓
-         Add observation noise
-                  ↓
-      500 observed training values
-```
-
-PCA and the predictor learn from these **20 input setting/output pairs**. The actual calculations use full-precision inputs; the table is rounded for reading.
-
-#### Where do the test input settings come from?
-
-We generate **another 120 random input settings**. These are the first three from the same run:
-
-| Test input setting | Input 1 | Input 2 | Input 3 |
-| --- | ---: | ---: | ---: |
-| 1 | 0.652034 | 0.398686 | 0.621278 |
-| 2 | 0.557083 | 0.676415 | 0.303885 |
-| 3 | 0.495522 | 0.851212 | 0.120903 |
-
-For test input setting 1, we take two paths:
-
-```text
-                [0.652034, 0.398686, 0.621278]
-                              │
-              ┌───────────────┴───────────────┐
-              ↓                               ↓
-     Trained PCA + GP                Synthetic function
-              ↓                               ↓
-   500 predicted values              500 correct values
-              │                               │
-              └───────────────┬───────────────┘
-                              ↓
-                Compare to measure error
-```
-
-**The model receives only the test input setting’s three inputs.** We keep the correct outputs for checking its predictions afterward. We repeat this for all 120 test input settings and combine their errors into one RMSE. Random Forest and MLP are evaluated on the same test input settings.
-
-#### Why generate 160 training input settings if this row uses only 20?
-
-The notebook prepares a pool so it can compare different training sizes fairly:
-
-```text
-Training pool: 160 input settings
-    20-setting experiment → use the first 20
-    40-setting experiment → use the first 40
-    80-setting experiment → use the first 80
-   160-setting experiment → use all 160
-
-Separate test set: 120 input settings → assess every training size
-```
-
-For the **20-setting experiment**, the other 140 training-pool input settings do not participate in fitting. The test input settings come from a separate random draw. Whole input settings stay in one set; pixels from one input setting are not divided between training and testing.
-
-### Turn prediction errors into a score
-
-> **Teaching example:** true values `[2,4]`, predicted values `[2.5,3.5]`.
-
-The errors are `[+0.5,−0.5]`. Their squared values are `[0.25,0.25]`. The mean squared error is **0.25**. Its square root, **RMSE**, is **0.5**.
-
-We use the same calculation across all test input settings, locations, and channels. Smaller RMSE means a closer prediction. It is in output units, not percent accuracy.
-
-### Read the measured prediction results
-
-Every entry below is **mean RMSE ± one sample standard deviation across five repeats**, compared with clean test maps.
-
-
-| Process | Training input settings | GP | Random Forest | MLP |
-| --- | --- | --- | --- | --- |
-| A | 20 | 0.03583 ± 0.00278 | 0.23891 ± 0.02166 | 0.07644 ± 0.01710 |
-| A | 40 | 0.02034 ± 0.00252 | 0.17895 ± 0.00854 | 0.03447 ± 0.00486 |
-| A | 80 | 0.01200 ± 0.00124 | 0.14152 ± 0.01226 | 0.02517 ± 0.00758 |
-| A | 160 | 0.00785 ± 0.00054 | 0.11664 ± 0.00954 | 0.02233 ± 0.00366 |
-| B | 20 | 0.07763 ± 0.02463 | 0.23718 ± 0.01738 | 0.11228 ± 0.02761 |
-| B | 40 | 0.03868 ± 0.00135 | 0.21251 ± 0.00868 | 0.06562 ± 0.02577 |
-| B | 80 | 0.01652 ± 0.00581 | 0.20395 ± 0.01212 | 0.03730 ± 0.00712 |
-| B | 160 | 0.00912 ± 0.00140 | 0.16657 ± 0.01372 | 0.02615 ± 0.00451 |
-
-
-### How the “A, 20” row is aggregated
-
-**20 means the number of training input settings.** Each model’s entry combines errors in two stages.
-
-**First, calculate one error for one run.** Train on 20 input settings, then predict outputs for 120 separate test input settings. Each Process An input setting produces 5 channels × 10 × 10 locations = 500 output values. Therefore, that run compares:
-
-```text
-120 test input settings × 500 values = 60,000 predicted values
-```
-
-For every value, calculate the difference between the prediction and the true, clean synthetic value. Then:
-
-```text
-One run’s RMSE = √(sum of all 60,000 squared differences ÷ 60,000)
-```
-
-This produces **one error number covering all test input settings, channels, and locations**, with equal weight for each value. We calculate this error after reconstructing the maps and reversing the scaling.
-
-**Second, repeat five times and summarize.** Each random seed gives its own training and test input settings. Within a repeat, GP, Random Forest, and MLP use the same data.
-
-For **GP with 20 Process A training input settings**, the actual results were:
-
-| Repeat seed | RMSE across its 60,000 test values |
-| --- | ---: |
-| 10 | 0.037794 |
-| 20 | 0.033236 |
-| 30 | 0.036360 |
-| 40 | 0.032710 |
-| 50 | 0.039040 |
-
-Average those five RMSE values:
-
-```text
-Mean RMSE = (0.037794 + 0.033236 + 0.036360
-             + 0.032710 + 0.039040) ÷ 5
-          ≈ 0.03583
-```
-
-Their sample standard deviation is **0.00278**, giving the table entry **0.03583 ± 0.00278**. The calculations use the unrounded run results.
-
-The Random Forest and MLP entries are calculated in the same way:
-
-| Model | Average RMSE across five repeats | Variation across repeats |
-| --- | ---: | ---: |
-| GP | 0.03583 | ± 0.00278 |
-| Random Forest | 0.23891 | ± 0.02166 |
-| MLP | 0.07644 | ± 0.01710 |
-
-So **0.03583 ± 0.00278 means the GP’s average test error and how much that error varied across five runs**. The ± value is not the GP’s uncertainty for an individual prediction.
-
-### Read the prediction-error graph
-
-![Prediction error as training data increases](results/learning_curves.png)
-
-**Read this picture:** Choose one panel. Move right to increase the training data and look for lower error. Each colored band is one standard deviation across repeats; it is not a 95% confidence interval.
-
-
-### Exactly what do the dashed gray and dotted lines compare?
-
-| Line | What we compare with the clean test outputs |
-| --- | --- |
-| **Dashed gray: average-map baseline** | The average of the **training maps**, repeated for every test input setting |
-| **Dotted: PCA diagnostic** | Each test input setting’s **noisy output maps after PCA compression and reconstruction** |
-
-
-> **Teaching example:** the following values illustrate one comparison. They are not measured values from the experiment.
-
-For **one test input setting, one channel, one location**, imagine these values:
-
-```text
-Correct clean test value:                   1.00
-
-Average training value at that location:    0.70
-PCA reconstruction of the noisy test value: 1.04
-```
-
-The errors contributing to RMSE are:
-
-```text
-Dashed gray: (0.70 − 1.00)² = 0.09
-Dotted PCA:  (1.04 − 1.00)² = 0.0016
-```
-
-We repeat that comparison across **all 120 test input settings × 5 channels × 100 locations = 60,000 values** for Process A.
-
-For each line separately:
-
-```text
-RMSE = √(average of its 60,000 squared errors)
-```
-
-Then we repeat the experiment five times and plot the average RMSE. For Process B, the corresponding count is 120 × 10 × 100 = 120,000 values per run.
-
-The key difference: **the gray line uses training outputs to make its guess; the dotted line uses the noisy test outputs themselves to make its reconstruction.** Both are checked against the clean test outputs. The dotted line checks compression and reconstruction; its access to noisy test outputs means it does not measure prediction from an input setting alone.
-
-The **dashed gray line** asks: “Does using the input setting actually help?” It always predicts the average training maps. A model below this line has lower error than always guessing the average. All three trained methods beat this baseline in our experiment.
-
-The **dotted PCA line** asks: “How much error comes from compressing and reconstructing maps?” It receives noisy test maps and passes them through PCA, without using GP, Random Forest, or MLP. Low error suggests that five scores can describe the maps well. If a trained model has much higher error, predicting scores from the input setting is likely a bigger difficulty than representing the maps with PCA.
-
- **The gray line checks whether learning helps; the dotted line checks whether PCA represents the outputs well.**
-
-**Measured finding:** GP has the lowest mean error at all tested sizes in this final configuration. At 20 input settings, A’s GP error is 0.03583 and B’s is 0.07763. This supports GP for these particular low-data, smooth synthetic tasks. It does not establish that GP is universally best.
-
-### Look at mistakes on one map
-
-
-![Process A: true maps, predictions, and errors](results/maps_A.png)
-
-**Read this picture:** Top row: clean truth and predictions. Bottom row: prediction minus truth. Positive error means overprediction; negative error means underprediction. Shared color scales make the models comparable within this figure.
-
-
-![Process B: true maps, predictions, and errors](results/maps_B.png)
-
-**Read this picture:** This is also one preselected example: seed 10, 80 training input settings, first held-out input setting, first channel. The score table uses every test input setting and channel, not just this picture.
-
-
-### Check whether GP uncertainty is believable
-
-This section checks **whether the GP’s uncertainty estimates match what happens on test data**.
-
-You already know the prediction flow:
-
-```text
-New input setting → GP → five predicted scores → PCA decoder → predicted maps
-```
-
-For each score, the GP also gives an uncertainty estimate. We check that estimate **before decoding the scores into maps**.
-
-#### 1. The GP predicts a score and a range
-
-> **Teaching example:** these small numbers illustrate an interval; they are not measured scores from the study.
-
-Suppose, for one test input setting, the GP predicts:
-
-```text
-Score 1: best guess = 3
-         standard deviation = 0.5
-```
-
-We calculate an approximate 95% interval:
-
-```text
-3 ± 1.96 × 0.5 = [2.02, 3.98]
-```
-
-Across many predictions, the aim is for these intervals to contain the observed scores about 95% of the time under the model’s assumptions. The GP is expressing uncertainty about **score 1**, so the answer we check must also be a score.
-
-#### 2. Convert the observed test maps into scores
-
-We already have the test input setting’s noisy observed maps. Pass them through the **saved PCA and scaling** to calculate their five observed scores.
-
-```text
-120 Test Input Recipes
-          │
-          ├──→ Synthetic Function
-          │          ↓
-          │     Test Output Maps
-          │          ↓
-          │     PCA Encoder
-          │          ↓
-          │     5 Observed PCA Scores
-          │
-          └──→ 5 Trained GP Models
-                     ↓
-              Predicted Mean ± 1.96 × SD
-                     ↓
-          Compare observed PCA scores
-          with GP prediction intervals
-```
-
-```text
-Predicted interval: [2.02, 3.98]
-Observed score:      3.4
-
-Inside? Yes.
-```
-
-If the observed score were **4.3**, the answer would be **No**.
-
-| What we check | What we compare |
-| --- | --- |
-| Prediction accuracy, using RMSE | Reconstructed predicted maps against clean ground-truth maps |
-| GP uncertainty coverage | Predicted score intervals against scores calculated from noisy observed test maps |
-
-Our intervals include observation noise, so this check uses noisy observed maps. Intervals for the underlying clean scores would require a different uncertainty calculation.
-
-#### 3. Count how often the intervals contain the observed scores
-
-We do this for all five scores of all 120 test input settings:
-
-```text
-120 input settings × 5 scores = 600 checks per run
-```
-
-For illustration, if 570 of those 600 checks succeed:
-
-```text
-Coverage = 570 ÷ 600 × 100 = 95%
-```
-
-That would match the intended coverage. We repeat the study five times and average the measured coverage. These checks are not all independent.
-
-#### 4. Read our actual results
-
-| Process | Training input settings | Intended coverage | Measured coverage | Mean interval width |
-| --- | ---: | ---: | ---: | ---: |
-| A | 20 | 95% | 88.47% | 0.9568 |
-| A | 40 | 95% | 92.27% | 0.5805 |
-| A | 80 | 95% | 94.33% | 0.4137 |
-| A | 160 | 95% | 95.27% | 0.3554 |
-| B | 20 | 95% | 93.07% | 1.2005 |
-| B | 40 | 95% | 92.97% | 0.6093 |
-| B | 80 | 95% | 96.30% | 0.2798 |
-| B | 160 | 95% | 94.73% | 0.1713 |
-
-For **A with 20 training input settings**, coverage was 88.47%: too many observed scores fell outside the intervals. The GP was more confident than these test results justified. B’s coverage was 93.07%.
-
-With **160 training input settings**, coverage was 95.27% for A and 94.73% for B, close to the intended 95%. These are measured results on our test sets, rather than a guarantee for future data.
-
-#### 5. Why also show interval width?
-
-A very wide interval can contain almost every answer while giving little useful guidance.
-
-```text
-Narrow interval:  [2.9, 3.1]
-Wide interval:    [−100, 100]
-```
-
-We therefore check both:
-
-- **Coverage:** Do the intervals contain observed scores about as often as intended?
-- **Width:** How broad are those intervals?
-
-![GP score interval coverage and width](results/gp_uncertainty.png)
-
-**Read this picture:** The left panel shows measured coverage. Compare each curve with the dashed 95% target line. The right panel shows mean interval width in standardized-score units. We want coverage near its intended level together with useful, reasonably narrow ranges. Narrower ranges alone do not prove better uncertainty.
-
-**Why move on?** GP predicted reasonably well here and gives an uncertainty estimate we can inspect. The next question is whether those predictions can help us decide which input to evaluate. That requires a separate experiment.
-
-## 4. Experiment 2 — PCA + GP BO
-
-Experiment 1 showed that **PCA + GP can predict output maps accurately and provide uncertainty estimates**. Experiment 2 uses those predictions and uncertainties to decide which input recipe to evaluate next.
-
-We will follow **one complete BO iteration for Process A**, using the same setup as your experiment.
-
-### Step 0 — What we already have
-
-Suppose we have evaluated 20 initial input recipes.
-
-For each recipe:
-
-```text
-3 Input Values
-      ↓
-Synthetic Function + Noise
-      ↓
-500 Observed Output Values
-      ↓
-PCA Encoder
-      ↓
-5 PCA Scores
-```
-
-We train five GPs to predict these scores from the three input values.
-
-We also have a fixed target containing 500 desired output values.
-
-Among our 20 initial recipes, suppose the lowest observed target-matching MSE is:
-
-\[
-\boxed{\text{Best MSE}=0.0037}
-\]
-
-Our goal is to find a new recipe with an even smaller MSE.
-
-### Step 1 — Predict the candidate recipes
-
-Python generates 1,500 candidate recipes. These have not been evaluated using the synthetic function.
-
-Consider three candidates from that pool:
-
-| Candidate | Input recipe |
-|---|---|
-| A | [0.2, 0.6, 0.8] |
-| B | [0.4, 0.7, 0.5] |
-| C | [0.8, 0.3, 0.2] |
-
-For each candidate, the five trained GPs predict five PCA-score means and five standard deviations.
-
-For example, candidate B might have:
-
-| PCA score | Predicted mean | Standard deviation |
-|---|---:|---:|
-| 1 | 0.50 | 0.10 |
-| 2 | −0.20 | 0.15 |
-| 3 | 0.80 | 0.20 |
-| 4 | 0.30 | 0.10 |
-| 5 | −0.40 | 0.25 |
-
-These are illustrative standardized scores.
-
-**What does this mean?** The GPs believe candidate B will produce PCA scores close to `[0.50, −0.20, 0.80, 0.30, −0.40]`, but they are uncertain about the exact values.
-
-We have not yet evaluated candidate B.
-
-### Step 2 — Generate 128 possible outcomes
-
-Instead of assuming the GP means are exactly correct, BO considers uncertainty.
-
-For candidate B, we sample 128 possible sets of five scores from the GP predictive distributions.
-
-For simplicity, imagine only three samples:
-
-| Sample | Five possible PCA scores |
-|---|---|
-| 1 | [0.52, −0.15, 0.75, 0.32, −0.35] |
-| 2 | [0.45, −0.25, 0.90, 0.28, −0.50] |
-| 3 | [0.60, −0.10, 0.70, 0.35, −0.20] |
-
-Each sample represents one possible output of candidate B.
-
-We then reconstruct the full maps:
-
-```text
-5 Sampled PCA Scores
-          ↓
-Reverse Score Scaling
-          ↓
-Saved PCA Decoder
-          ↓
-Reverse Channel Scaling
-          ↓
-500 Possible Output Values
-          ↓
-Compare with 500 Target Values
-          ↓
-One Possible Target-Matching MSE
-```
-
-Suppose the three reconstructed outcomes give:
-
-| Sample | Possible MSE |
-|---|---:|
-| 1 | 0.0020 |
-| 2 | 0.0050 |
-| 3 | 0.0010 |
-
-These are **predicted possibilities, not actual synthetic function evaluations**.
-
-### Step 3 — Calculate Expected Improvement
-
-Our best observed MSE is 0.0037.
-
-For each possible outcome, calculate how much better it would be than our current best:
-
-\[
-\text{Improvement}=\max(0,\text{Best MSE}-\text{Sampled MSE})
-\]
-
-| Sample | Possible MSE | Improvement |
-|---|---:|---:|
-| 1 | 0.0020 | 0.0017 |
-| 2 | 0.0050 | 0 |
-| 3 | 0.0010 | 0.0027 |
-
-For sample 2, MSE is worse than 0.0037, so improvement is zero.
-
-Average the improvements:
-
-\[
-EI=\frac{0.0017+0+0.0027}{3}
-\]
-
-\[
-\boxed{EI\approx0.00147}
-\]
-
-In the actual experiment, we average over **128 samples**, not three.
-
-BO calculates EI for all remaining candidate recipes.
-
-Suppose the results are:
-
-| Candidate | Expected Improvement |
-|---|---:|
-| A | 0.0008 |
-| B | 0.0015 |
-| C | 0.0004 |
-
-**BO selects candidate B because it has the highest Expected Improvement.**
-
-Notice that BO does not simply choose the candidate with the lowest predicted mean MSE. EI considers both predicted performance and uncertainty.
-
-### Step 4 — Evaluate the selected candidate
-
-Now, for the first time, we actually evaluate candidate B.
-
-```text
-Selected Recipe B
-[0.4, 0.7, 0.5]
-        ↓
-Synthetic Function
-        ↓
-500 Clean Output Values
-        ↓
-Add Observation Noise
-        ↓
-500 Observed Output Values
-        ↓
-Compare with Target Maps
-        ↓
-Observed MSE = 0.0018
-```
-
-Our previous best was 0.0037.
-
-Since:
-
-\[
-0.0018 < 0.0037
-\]
-
-candidate B becomes our new best observed recipe.
-
-**Important:** The GP did not directly predict this observed MSE. We calculated it after evaluating the selected recipe.
-
-### Step 5 — Update the Gaussian Processes
-
-We now have one new input-output example.
-
-To update the GPs, we cannot directly use the 500 observed output values because each GP is trained to predict a PCA score.
-
-Therefore, we encode the new observation:
-
-```text
-Selected Input Recipe B
-[0.4, 0.7, 0.5]
-          │
-          ├──────────────────────┐
-          │                      │
-          │               500 Observed Values
-          │                      ↓
-          │                Saved PCA Encoder
-          │                      ↓
-          │                5 Observed Scores
-          │                      │
-          └──────────┬───────────┘
-                     ↓
-             Add Training Example
-                     ↓
-          Refit the 5 Gaussian Processes
-                     ↓
-             21 Training Examples
-```
-
-The PCA encoder, decoder and scaling settings remain fixed. Only the GPs are refitted using the additional observation.
-
-The GPs now have more information about how input recipes relate to PCA scores, which may improve their predictions and uncertainty estimates.
-
-### Step 6 — Repeat the process
-
-We repeat the same procedure for the remaining iterations:
-
-```text
-1,500 Candidate Recipes Initially
-               ↓
-5 GPs Predict Scores and Uncertainty
-               ↓
-128 Samples per Candidate
-               ↓
-PCA Reconstruction
-               ↓
-Calculate Possible MSEs
-               ↓
-Calculate Expected Improvement
-               ↓
-Select Highest-EI Candidate
-               ↓
-Evaluate Using Synthetic Function
-               ↓
-Encode Observed Maps into PCA Scores
-               ↓
-Refit the GPs
-               ↓
-Repeat for 24 BO Iterations
-```
-
-The total number of actual evaluations is:
-
-\[
-20\text{ initial}+24\text{ BO-selected}=\boxed{44}
-\]
-
-### Why don't the 128 Monte Carlo samples count as actual evaluations?
-
-The 128 Monte Carlo samples are **simulated predictions made by the GPs, not 128 actual runs of the synthetic function**.
-
-For one candidate recipe:
-
-```text
-             One Candidate Recipe
-               [0.4, 0.7, 0.5]
-                       |
-                       v
-                5 Trained GPs
-                       |
-                       v
-          Predict Means and Std. Devs.
-                       |
-                       v
-          Draw 128 Possible Score Sets
-                       |
-                       v
-           PCA Decoder for Each Set
-                       |
-                       v
-             128 Possible Maps
-                       |
-                       v
-           Calculate 128 Possible MSEs
-                       |
-                       v
-             Expected Improvement
-```
-
-We never call the synthetic function during these 128 simulations.
-
-We only use the trained GP models to estimate what the candidate might produce.
-
-After calculating Expected Improvement for all candidates, BO selects the candidate with the highest EI.
-
-Only then:
-
-```text
-Selected Candidate
-        ↓
-Actual Synthetic Function
-        ↓
-500 Clean Output Values
-        ↓
-Add Observation Noise
-        ↓
-500 Observed Output Values
-        ↓
-Update GP Training Data
-```
-
-That is **one actual process evaluation**.
-
-Suppose we have:
-
-- 1,500 candidate recipes.
-- 128 Monte Carlo samples per candidate.
-- 24 Bayesian Optimization iterations.
-
-At the first iteration, we generate:
-
-\[
-1500\times128=\boxed{192,000}
-\]
-
-possible simulated outcomes.
-
-But we evaluate only **one selected recipe** using the actual synthetic function.
-
-Across the experiment:
-
-| Operation | Count |
-|---|---:|
-| Initial synthetic function evaluations | 20 |
-| Additional BO-selected evaluations | 24 |
-| **Total actual process evaluations** | **44** |
-| Monte Carlo simulations | Up to 192,000 per BO iteration |
-
-As evaluated candidates are removed, fewer candidates remain in subsequent iterations.
-
-**The key idea:** The GP allows BO to explore thousands of possible outcomes computationally, while spending only one actual process evaluation per iteration.
-
-This is particularly valuable when the real process is expensive, such as running a semiconductor manufacturing experiment that takes hours or costs money.
-
-### Main Distinction to Remember
-
-| Operation | What it does |
-|---|---|
-| GP prediction | Predicts five PCA scores and their uncertainty |
-| PCA decoder | Reconstructs possible 500-value output maps |
-| MSE | Measures how closely a map matches the desired target |
-| Expected Improvement | Estimates how promising an unevaluated candidate is |
-| Synthetic function | Produces the actual observation for the selected recipe |
-| PCA encoder | Converts the new observed map into scores for GP retraining |
-
-**Experiment 1 is about predicting outputs accurately. Experiment 2 is about using those predictions and their uncertainty to select better input recipes with fewer actual evaluations.**
-
-## 5. Experiment 3 — Ask for one output value using an ID
-
-### Start with the problem we want to solve
-
-A outputs 500 numbers per input setting, while B outputs 1,000. Their inputs also have different lengths. A single conventional model cannot simply switch its input and output array sizes whenever the process changes.
-
-Instead of asking for the whole map collection at once, ask one question:
-
-**“For input setting `[0.2,0.6,0.8]`, at row 6, column 7, what is output A-3?”**
-
-The answer is one number. We calculated the clean answer near the beginning: **−0.090171**. That number illustrates the target of the query, not a claimed fitted-model prediction.
-
-Changing the ID asks for another channel. Changing the location asks for another point. Changing the input setting changes the operating settings.
-
-**An ID alone is not enough.** “A-3” names an output; it does not specify its changing value.
-
-### Give every query the same shape
-
-
-| Part | Our A example | Why it is included |
+| Study | Notebook | Figures |
 | --- | --- | --- |
-| Four input setting slots | [0.2, 0.6, 0.8, 0] | A has only three settings, so its fourth slot is a placeholder. |
-| Four presence bits | [1, 1, 1, 0] | Tell the model that the fourth setting is absent, rather than a genuine zero. |
-| Two location coordinates | Approximately [0.5556, 0.3333] | Specify column 7 and row 6 on the normalized grid. |
-| Fifteen output-ID flags | A-3 flag = 1; all other flags = 0 | Specify which channel the question concerns. |
+| Synthetic processes A and B (Experiments 1–3) | [Process_Study_Code_Only.ipynb](Process_Study_Code_Only.ipynb) | `results/` |
+| BOSCH plasma etching, real wafers (Experiment 1) | [Real_Data_BOSCH_Experiment1.ipynb](Real_Data_BOSCH_Experiment1.ipynb) | `results/bosch/` |
 
+Every number and figure below is a measured result from these notebooks, and `make all` regenerates them (see the `Makefile`). Process **A** and Process **B** are two datasets; Experiments **1**, **2** and **3** are the three questions.
 
-That gives **25 input features and one scalar output** for every query. A real zero in B’s fourth input would have presence bit 1.
+**Models compared**
 
-The IDs are A-1…A-5 and B-1…B-10. Their one-hot flags avoid inventing a numerical distance between arbitrary labels. A-1 and B-1 remain different outputs because their meanings in this generator differ.
+| Name | What it does |
+| --- | --- |
+| PCA+GP | 5 PCA scores, one Gaussian process per score |
+| PCA+RF | 5 PCA scores, one random forest predicting all of them |
+| PCA+MLP | 5 PCA scores, one small neural network predicting all of them |
+| Direct GP / RF / MLP | The same predictors on every map value, with no PCA. Direct GP uses one kernel for all outputs |
+| PCA+RF (std. scores) | PCA+RF with each score rescaled to equal size |
+| PCA+shared GP (BOSCH only) | 10 PCA scores, **one** GP with one kernel for all scores |
 
-No extra process-ID column is needed: the global output ID already identifies its process. The interface is shared, but the model is not ignorant of process identity.
+---
 
-### Training and inference for this model
+## 1. Synthetic study
 
-**Training:** turn each observed input setting/location/channel value into a query row and its target. Fit one neural network on rows from both processes. Scale the output values per channel using training observations only.
+| | Process A | Process B |
+| --- | --- | --- |
+| Inputs | 3 | 4 |
+| Output map | 5 channels × 10 × 10 = 500 values | 10 channels × 10 × 10 = 1,000 values |
+| Observation noise (SD) | 0.035 | 0.035 |
 
-**Inference:** build a query for a new input setting, location, and known output ID; predict one normalized value; undo that channel’s output scaling. To reconstruct whole maps, issue all the necessary queries in a batch: 500 for A or 1,000 for B.
+The true function is known, so errors are measured against the **clean** maps. Training sizes are 20, 40, 80 and 160 input settings, with 120 test settings and 5 seeds.
 
-There is no PCA decoder in this experiment. The shared neural network predicts scalar values directly. Its learned weights are what the processes share.
+### The synthetic data
 
-### Compare sharing with a fair reference
+![Process A maps](results/function_maps_A.png)
 
-We compare that one pooled network with **two separate scalar networks**, one per process. Both methods use the same query format, architecture, and observed labels for each process.
+![Process B maps](results/function_maps_B.png)
 
-For each of three seeds—101, 202, 303—each process has **40 training input settings and 60 separate test input settings**. Training observes only 25 locations per input setting: row and column indices `[0,2,4,6,9]`, giving a 5 × 5 selection. Testing predicts all 100 locations, so it includes unseen input settings and some unobserved locations.
+**What it shows:** the clean output maps of Process A (5 channels) and Process B (10 channels) when every input is 0.5. Each channel is a 10 × 10 map made of a few smooth spatial patterns. Because the channels share the same patterns, they move together, and a few PCA scores can describe them.
 
-A provides 5,000 scalar training labels and B provides 10,000. These are still only 40 distinct training input settings per process. The pooled model sees both sets; each separate model sees its own set. The two separate networks collectively have more parameters than the one pooled network, so this is not a perfect capacity-matched test.
+### Experiment 1 — which surrogate predicts maps best?
 
-**Do not compare this error directly with the earlier PCA errors.** The training observations, sampling seeds, and prediction task differ. The matched comparison is shared scalar versus separate scalar.
+Mean RMSE ± SD across five seeds, against clean test maps:
 
-### Measured sharing results
+| Process | Training settings | PCA+GP | PCA+RF | PCA+MLP | Direct GP | Direct RF | Direct MLP |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| A | 20 | **0.03583** ± 0.00278 | 0.19100 ± 0.02022 | 0.07644 ± 0.01710 | 0.07269 ± 0.00892 | 0.19238 ± 0.01887 | 0.09735 ± 0.02775 |
+| A | 40 | **0.02034** ± 0.00252 | 0.14016 ± 0.02679 | 0.03447 ± 0.00486 | 0.05288 ± 0.00329 | 0.14106 ± 0.02652 | 0.04515 ± 0.00533 |
+| A | 80 | **0.01200** ± 0.00124 | 0.09137 ± 0.01389 | 0.02517 ± 0.00758 | 0.05037 ± 0.00499 | 0.09223 ± 0.01329 | 0.02532 ± 0.00287 |
+| A | 160 | **0.00785** ± 0.00054 | 0.07113 ± 0.01273 | 0.02233 ± 0.00366 | 0.03283 ± 0.00342 | 0.07261 ± 0.01287 | 0.01899 ± 0.00177 |
+| B | 20 | **0.07763** ± 0.02463 | 0.21344 ± 0.01300 | 0.11228 ± 0.02761 | 0.11960 ± 0.01740 | 0.21339 ± 0.01244 | 0.18981 ± 0.04508 |
+| B | 40 | **0.03868** ± 0.00135 | 0.18687 ± 0.01456 | 0.06562 ± 0.02577 | 0.08108 ± 0.00736 | 0.18645 ± 0.01440 | 0.10394 ± 0.02493 |
+| B | 80 | **0.01652** ± 0.00581 | 0.14987 ± 0.02850 | 0.03730 ± 0.00712 | 0.04550 ± 0.00693 | 0.14989 ± 0.02906 | 0.04958 ± 0.00762 |
+| B | 160 | **0.00912** ± 0.00140 | 0.09579 ± 0.00690 | 0.02615 ± 0.00451 | 0.03192 ± 0.00302 | 0.09653 ± 0.00650 | 0.02539 ± 0.00436 |
 
+For reference, predicting the training-average map for every test setting gives an error of 0.30–0.41.
 
-| Process | Separate mean RMSE ± SD | Shared mean RMSE ± SD | Reduction in mean error |
+![Synthetic learning curves](results/learning_curves.png)
+
+**What it shows:** test error (log scale) against the number of training settings, for every model and both processes.
+
+- **Line styles:** solid lines are PCA models, dash-dot lines are direct models, and the faint dashed line is PCA+RF with standardised scores.
+- **The dotted line is the PCA limit:** the error left if the five scores of each test map were predicted perfectly.
+- **What to look for:** PCA+GP drops fastest and stays lowest.
+
+![Process A example](results/maps_A.png)
+
+![Process B example](results/maps_B.png)
+
+**What it shows:** one test setting (first channel, 80 training settings, seed 10).
+
+- **Top row:** the clean truth and four models' predicted maps.
+- **Bottom row:** prediction minus truth.
+- **What to look for:** PCA+GP's error map is almost blank. PCA+RF is the clear outlier: it misses whole blobs of the pattern for A (strong red and blue patches) and is too high across the whole map for B.
+
+![PCA compression](results/pca_compression.png)
+
+**What it shows:** the share of the training maps' variation kept by the first 1–5 PCA scores (80 training settings, seed 10).
+
+- Two scores keep most of Process A's variation; B needs three.
+- Five scores keep 97–98% for both processes, at every training size.
+- So compressing 500 or 1,000 values to 5 numbers loses little.
+
+![GP uncertainty](results/gp_uncertainty.png)
+
+**What it shows:** how often the GP's 95% ranges for the scores contain the observed score (left), and how wide those ranges are (right).
+
+- **Coverage:** close to the intended 95% from about 80 training settings.
+- **Width:** the ranges narrow as data grows.
+
+**Findings**
+
+- **PCA+GP is the most accurate model at every size for both processes.** Going from 20 to 160 training settings cuts its error by 78% (A) and 88% (B).
+- **PCA helps the GP a lot.** PCA+GP beats Direct GP in all 40 paired runs, with 35–76% lower error, and it is roughly 10–20× faster at 160 settings. Each score gets its own GP settings, while Direct GP has to use one setting for hundreds of outputs that behave differently.
+- **PCA helps the MLP when data is scarce.** PCA+MLP wins every run at 20 and 40 settings; at 160 the two are about level.
+- **PCA makes almost no difference to the Random Forest** (within about 2%). This holds only when RF learns the scores at their natural size: standardising them raises RF error by 11–74%, and the unscaled version wins 38 of 40 paired runs.
+- **Why standardising the scores after PCA hurts the Random Forest:**
+  - **How a tree picks a split.** It chooses the cut that most reduces the squared error of its targets, added up across all targets.
+  - **With raw scores, the weights match what the RMSE measures.** Score 1 varies much more than score 5, so it dominates the split choice. That is the right priority, because score 1 also has by far the biggest effect on map error.
+  - **After standardising, every score has SD 1 and counts equally.** Score 5 is a small pattern and mostly noise, yet it now gets as much say over the splits as score 1. The trees spend many splits on patterns that barely affect the map, and the large patterns are fitted worse.
+  - **The damage grows with more data:** +25% → +64% from 20 to 160 settings for A, and +11% → +74% for B.
+- **Why raw-score PCA+RF ≈ Direct RF.** PCA is only a rotation of the output space, and a rotation does not change the total squared error, so a tree's split criterion is the same either way. Direct RF is in effect "PCA+RF with raw scores and all components kept". Keeping only 5 components also drops some noise, which is why the raw-score version is slightly better on Process A (0.6–2.0% lower error at every size).
+- **Compression is not the bottleneck.** Five scores keep 97–98% of the variation, and the PCA limit (0.008–0.023) is well below most models' errors.
+- **The GP's uncertainty becomes trustworthy with enough data.** Its 95% ranges contain the observed score 88.5% (A) and 93.1% (B) of the time at 20 settings, and 95.3% and 94.7% at 160.
+
+### Experiment 2 — can the surrogate find better input settings?
+
+The goal is to find the input setting whose map best matches a target map. Each search starts from 20 evaluated settings and picks 24 more from 1,500 candidates. Three ways of choosing the next setting are compared:
+
+- **PCA+GP BO:** Bayesian optimisation that predicts whole maps.
+- **Scalar GP BO:** standard Bayesian optimisation that predicts only the final match error.
+- **Random search.**
+
+Clean match error (MSE) of the recommended setting after all 44 evaluations, mean ± SD over five seeds:
+
+| Process | PCA+GP BO | Scalar GP BO | Random search |
 | --- | --- | --- | --- |
-| A | 0.14225 ± 0.00674 | 0.13662 ± 0.00698 | 4.0% |
-| B | 0.11187 ± 0.02216 | 0.10663 ± 0.00901 | 4.7% |
+| A | 0.000616 ± 0.0000009 | 0.000616 ± 0.0000009 | 0.006401 ± 0.005026 |
+| B | 0.002047 ± 0.000000 | 0.002234 ± 0.000418 | 0.009616 ± 0.002685 |
+
+![Search progress](results/pca_bo_curves.png)
+
+**What it shows:** the clean match error of the setting each method would recommend so far (log scale), against the number of evaluations, starting with the 20 initial ones.
+
+- **Lines and bands:** each line is the median over five seeds; the band spans the middle 50%.
+- **What to look for:** PCA+GP BO drops to its final value within a few steps.
+
+**Findings**
+
+- **Both GP methods beat random search in every run,** ending with 4–10× lower error.
+- **Both end up at almost the same recipe.** PCA+GP BO found the best candidate of all 1,500 in 9 of 10 runs, Scalar GP BO in 8 of 10. Head to head: PCA+GP BO better in 2 runs, Scalar GP BO in 1, and 7 ties.
+- **PCA+GP BO gets there much faster.** Its median result stops improving within the first **4** search steps on both processes; Scalar GP BO needs about **8** steps (A) and **22** (B). Each evaluation gives it five scores describing the whole map instead of one number.
+
+### Experiment 3 — can one model serve two processes?
+
+Each query is encoded as (input setting, map location, output ID) and the model returns one value. One network trained on A and B together is compared with a separate network per process. Training sees only a 5 × 5 grid of locations; testing covers all 100.
+
+| Process | Separate models | Shared model | Change |
+| --- | --- | --- | --- |
+| A | 0.14225 ± 0.00674 | 0.13662 ± 0.00698 | −4.0% |
+| B | 0.11187 ± 0.02216 | 0.10663 ± 0.00901 | −4.7% |
+
+![Shared vs separate](results/shared_query_comparison.png)
+
+**What it shows:** mean test error of the separate and shared models for each process. Error bars are one SD over three splits. The shared bar is slightly lower for both processes, but the error bars overlap, and for B the separate model varies much more between splits.
+
+![Shared vs separate maps](results/shared_query_maps.png)
+
+**What it shows:** the true map (left) and the two models' predictions for the first test setting of each process (first channel, seed 101).
+
+- Both models recover the main pattern from the 5 × 5 training locations.
+- For A the two predictions look similar. For B the shared model's map is visibly closer to the truth, especially the bright lower-left corner.
+
+**Finding:** sharing lowers error slightly. It wins 3 of 3 splits for A and 2 of 3 for B, so the evidence is limited.
+
+---
+
+## 2. BOSCH plasma etching (real wafers)
+
+**Data.** [Zenodo record 17122442](https://doi.org/10.5281/zenodo.17122442) (CC BY 4.0; details in [data/bosch/SOURCE.md](data/bosch/SOURCE.md)).
+
+- **Wafers:** 88, in 10 lots, all etched with one deep-silicon recipe: 100 cycles of an SF6 etch step and a C4F8 protective step.
+- **Before each lot,** the chamber was conditioned 1, 3 or 9 times, on the empty chuck, a Si wafer or an SiO₂ wafer. That is one label per lot, such as "3C - Si".
+- **Outputs per wafer:** 89 points × 2 channels: **oxide etch** (mask loss, about 0.67 µm) and **Si etch** (depth, about 43.7 µm). That makes 178 values.
+- **Inputs (6):**
+  - position of the wafer in its lot;
+  - number of conditioning repeats;
+  - conditioning surface (three yes/no columns);
+  - incoming oxide thickness.
+
+  Four of the six are the same for every wafer in a lot.
+
+**Test: leave one lot out.**
+
+- Train on 9 lots, predict every wafer of the 10th, and repeat for all 10 lots, so each wafer is predicted once.
+- Training sizes are 20, 40 and 78 wafers; 78 is the smallest number available when a 10-wafer lot is held out.
+- Each experiment uses 5 seeds.
+- Errors are against the **measured** maps.
+- **Normalised RMSE** divides each channel's error by that channel's overall spread (SD), so **1.0 ≈ always guessing the average** and 0 = perfect.
+
+### Experiment 1 with the 6 inputs
+
+Normalised RMSE, mean over five seeds:
+
+| Training wafers | PCA+GP | PCA+RF | PCA+MLP | Direct GP | Direct RF | Direct MLP | PCA+RF (std.) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 20 | 0.746 | 0.654 | 0.820 | 0.702 | 0.657 | 0.946 | **0.650** |
+| 40 | 0.762 | 0.649 | 0.846 | 0.650 | 0.652 | 1.009 | **0.639** |
+| 78 | 0.732 | 0.668 | 0.954 | **0.660** | 0.676 | 1.007 | 0.669 |
+
+At 78 wafers, the best oxide error is 0.072 µm (Direct GP) and the best Si error is 0.373 µm (PCA+RF std.).
+
+![BOSCH learning curves](results/bosch/learning_curves.png)
+
+**What it shows:** error on the held-out lot (µm, log scale) against training wafers, for oxide (left) and Si (right).
+
+- **Line styles:** as in the synthetic figure; the dotted line is the PCA limit.
+- **What to look for:** the lines are nearly flat, so more wafers barely help. For oxide, every model sits far above the PCA limit; for Si, the best models are close to it.
+
+![BOSCH example maps](results/bosch/example_maps.png)
+
+**What it shows:** measured map, PCA+GP prediction and error on the wafer plane, for the first wafer of lot 8 (typical) and of lot 1 (hard). Each was predicted with its lot held out (78 training wafers, seed 10).
+
+- **Lot 8:** oxide is predicted well (RMSE 0.026 µm), and Si is about 0.29 µm too high across the whole wafer.
+- **Lot 1:** the model expects the usual oxide edge and overpredicts the edge ring by up to about 0.2 µm (oxide RMSE 0.128 µm). This lot etched much less oxide at the edge.
+
+![BOSCH PCA and GP uncertainty](results/bosch/pca_and_uncertainty.png)
+
+**What it shows:**
+
+- **Left:** the share of map variation kept by the first 1–5 PCA scores for one fold (lot 1 held out), about 93% with 5 scores. Over all folds the range is 94–96%.
+- **Right:** how often the GP's 95% ranges contain the held-out lots' scores, only 78–82%, far below the intended 95%.
+
+**Findings**
+
+- **PCA+GP is not the best model here.** It loses to Direct GP in every seed at every size, with 6–17% higher error. Its five separate GPs fit the nine training lots too closely; Direct GP's single kernel generalises better.
+- **More training wafers barely help.** Going from 20 to 78 wafers changes the error little for every model. The difficulty is that each new lot behaves differently, not a shortage of wafers.
+- **The effect of PCA depends on the model:**
+  - Random Forest: PCA+RF beats Direct RF in all 5 seeds, but by less than 1.2%.
+  - MLP: PCA cuts the error by 5–16%.
+  - GP: PCA hurts (see above).
+- **Si is fairly predictable; oxide is not.**
+  - **Si:** errors of 0.37–0.46 µm (all models except Direct MLP) sit close to the PCA limit of 0.355 µm (the error left even if the 5 scores were predicted perfectly). Later wafers in a lot etch less, and the models learn this from position.
+  - **Oxide:** the best error, 0.072 µm, is about three times its PCA limit of 0.022 µm. Some lots, mainly lots 1 and 2, etch much less oxide at the wafer edge, and none of the 6 inputs explains why.
+- **Five PCA scores keep 94–96% of the map variation,** so compression is not the main problem.
+- **The GP is overconfident on new lots.** Its 95% ranges contain the true score only 78–82% of the time.
+- **A new lot is much harder than a known one.** If test wafers are drawn at random from all lots, errors fall to 0.30–0.40 (against 0.66–1.01 by lot): new lots are 67–210% harder.
+- **A shared conditioning label can mislead.** For the GP and Random Forest models, lots whose label also appears in another lot are *harder* (0.79–0.91 at 78 wafers) than lots with a unique label (0.51–0.56). Lots 1 and 9 are both "3C" but etched very different amounts of oxide.
+
+### Extra inputs: machine readings and plasma light
+
+The machine also records what happens *during* each etch. Two summaries of these recordings were added as inputs:
+
+- **53 machine readings:** gas flows, pressures, powers and temperatures, each averaged over the etch steps and over the protective steps.
+- **5 emission-line features from the plasma light:** the brightness of fluorine at 686 and 704 nm (in both step types) and of the C₂ carbon band at 516 nm (protective steps).
+  - The spectrometer's wavelength scale was corrected by 1.21 nm before measuring them.
+  - Seven other lines that were looked for (Si, SiF, CO, He, H, Ar, O) are not visible in the spectra.
+
+Both summaries are recorded while the wafer is etched. A model that uses them therefore predicts a wafer's map after etching but before it is measured, not before the wafer is run.
+
+![Fluorine light vs oxide etch](results/bosch/plasma_light.png)
+
+**What it shows:** the fluorine 686 nm line height during the etch steps against the wafer's mean oxide etch. Small dots are wafers; large dots are lot averages, numbered by lot. Lots 1 and 2, the two low-oxide lots (about 0.58 µm), have the brightest fluorine light, while the other lots sit around 0.66–0.69 µm.
+
+The comparison adds one model, **PCA+shared GP**. Before standardising, inputs are clipped to their training range in all three sets, which is why the 6-input numbers here differ slightly from the table above.
+
+Normalised RMSE at 78 training wafers, mean over five seeds:
+
+| Model | 6 inputs | + 53 machine readings | + 5 emission lines |
+| --- | --- | --- | --- |
+| PCA+GP | 0.745 | 0.821 | 0.687 |
+| PCA+RF | 0.668 | 0.791 | 0.645 |
+| PCA+MLP | 0.954 | 0.676 | 0.699 |
+| Direct GP | 0.660 | 0.595 | 0.542 |
+| Direct RF | 0.676 | 0.788 | 0.644 |
+| Direct MLP | 1.012 | 0.743 | 0.746 |
+| PCA+RF (std.) | 0.669 | 0.773 | 0.633 |
+| **PCA+shared GP** | 0.743 | 0.707 | **0.486** |
+
+The same comparison per channel, at 78 training wafers:
+
+| | 6 inputs (best model) | + 53 machine readings (best) | + 5 emission lines (best) |
+| --- | --- | --- | --- |
+| Oxide etch (µm) | 0.072 (Direct GP) | 0.065 (Direct GP) | **0.053** (PCA+shared GP) |
+| Si etch (µm) | 0.373 (PCA+RF std.) | **0.298** (Direct GP) | 0.346 (Direct GP) |
+
+![Extra inputs: learning curves](results/bosch/extra_inputs_curves.png)
+
+**What it shows:** error on the held-out lot against training wafers for all eight models with the 5 emission lines added, for both channels together, oxide and Si.
+
+- **The black dotted line** is Direct GP with only the 6 inputs, for reference.
+- **What to look for:** PCA+shared GP (thick line) keeps improving with more wafers and ends lowest. Separate-GP PCA+GP gets slightly worse.
+
+![Error maps of every model, with the emission lines](results/bosch/extra_inputs_example_maps.png)
+
+**What it shows:** the same two wafers as the main-run example maps, now for all eight models with the emission lines (78 training wafers, seed 10).
+
+- **First column:** the measured map. **Other columns:** prediction minus measurement (red = too high, blue = too low).
+- **Lot 1 oxide:** most models still overpredict the edge ring, but PCA+shared GP's ring is faint (RMSE 0.067 µm against 0.126–0.140 for separate-GP PCA+GP and the Random Forests).
+- **Lot 8 Si:** most models are uniformly a little too high.
+- **Single wafers vary:** these are two wafers only, and the ranking of models changes from wafer to wafer.
+
+**Findings**
+
+- **The plasma light is the first input that explains oxide.** With the 5 emission lines, Direct GP improves by 18% (0.660 → 0.542, better in 5 of 5 seeds) and its oxide error falls from 0.072 to 0.059 µm.
+- **Why it works:** the fluorine line is brightest in lots 1 and 2, the two low-oxide lots, at 1,022 and 1,003 counts against 890–985 for the others. The light measures the chamber's actual state, which the conditioning label only approximates. It also tells lot 1 from lot 9 despite their identical label.
+- **With the emission lines, one shared GP fixes PCA+GP.** PCA+shared GP reaches **0.486**, the lowest error of any model and input set, with an oxide error of 0.053 µm. Against separate-GP PCA+GP it is 29% better (5 of 5 seeds). Against Direct GP it is 10% better at 78 wafers (5 of 5 seeds), but about level at 40 (3 of 5) and worse at 20 (1 of 5).
+- **The largest gains are on the hardest lots.** For PCA+shared GP, adding the emission lines lowers lot 1's oxide error from 0.136 µm to 0.056 µm, and lot 9's from 0.126 to 0.074.
+- **The 53 machine readings mainly help Si,** giving the lowest Si error (0.298 µm, Direct GP). They hurt the models that cannot ignore unhelpful inputs: the Random Forests get 15–18% worse, and separate-GP PCA+GP 10% worse.
+- **Cautions:**
+  - **Weak seed evidence at 78 wafers.** The five seeds use almost the same wafers there: for 6 of the 10 lots the training pool is exactly 78 wafers, so those folds are identical in every seed. Agreement across seeds at that size is weak evidence.
+  - **Settings chosen on the same lots.** The PCA+shared GP settings (10 scores, large scores weighted more) were chosen after trying six versions on these same lots.
+  - **Only 10 lots.** The fluorine signal mainly separates 2 low-oxide lots from 8 others.
+  - **Within-lot jumps.** Sudden oxide changes between wafers *within* a lot remain unexplained.
+
+---
 
 
-![Shared versus separate scalar models](results/shared_query_comparison.png)
-
-**Read this picture:** Lower bars are better. Error bars show one standard deviation across three splits, not confidence intervals. The average advantage from sharing is small.
-
-
-**Measured finding:** sharing lowers mean error by about **4.0% for A** and **4.7% for B**. It wins three of three paired A splits and two of three B splits. For B at seed 303, the separate model is better: RMSE 0.09062 versus shared 0.09842.
-
-This is encouraging but limited. Three splits on related synthetic functions cannot establish that sharing generally helps.
-
-
-![True maps and scalar-model predictions](results/shared_query_maps.png)
-
-**Read this picture:** These are first-channel examples from seed 101, using the first test input setting for each process. They show where predictions differ; the reported scores include every test input setting and channel.
-
-
-### What the result does and does not establish
-
-It establishes that one fixed-size input query and one scalar output can serve both schemas. The shared model achieved a small average gain under this setup.
-
-It does not establish a universally meaningful latent space, or prediction for an unseen process or unseen output ID. The model has learned the known IDs. It cannot be claimed from the current experiment setting that merely creating a new label would not teach it a new response function, taking into consideration the data constraints, simulation assumptions chosen for this experiment.

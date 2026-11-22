@@ -1,0 +1,19 @@
+# Large BOSCH files downloaded by the notebook (about 7.4 GB)
+data/bosch/raw/
+*.part
+
+# Tables the BOSCH notebook rebuilds on every run (sections 1 and 2)
+data/bosch/lot_status.csv
+data/bosch/process_features.csv
+data/bosch/oes_lines.csv
+results/bosch/train_test_splits.csv
+
+# Python, Jupyter and editor files
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
